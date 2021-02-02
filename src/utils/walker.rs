@@ -3,16 +3,15 @@ use std::{
     path::PathBuf,
 };
 
-use glob::Pattern;
 use quicli::prelude::*;
 use regex::Regex;
 
 use crate::utils::display::Display;
 use crate::utils::lines::ToLines;
-use crate::utils::patterns::ToPatterns;
+use crate::utils::patterns::{Patterns, ToPatterns};
 
 pub struct Walker<'a> {
-    ignore_patterns: Vec<Pattern>,
+    ignore_patterns: Patterns,
     ignore_files: &'a Vec<String>,
     regexp: &'a Regex,
     display: &'a dyn Display,
@@ -20,7 +19,7 @@ pub struct Walker<'a> {
 
 impl<'a> Walker<'a> {
     pub fn new(
-        ignore_patterns: Vec<Pattern>,
+        ignore_patterns: Patterns,
         ignore_files: &'a Vec<String>,
         regexp: &'a Regex,
         display: &'a dyn Display,
@@ -33,36 +32,21 @@ impl<'a> Walker<'a> {
         }
     }
 
-    fn must_ignore(
-        &self,
-        ignore_patterns: &Vec<Pattern>,
-        root: &PathBuf,
-        entry: &DirEntry,
-    ) -> bool {
+    fn is_ignore_file(&self, entry: &DirEntry) -> bool {
+        let file_name = entry.file_name().to_str().unwrap().to_string();
+        self.ignore_files.contains(&file_name)
+    }
+
+    fn is_excluded(&self, patterns: &Patterns, root: &PathBuf, entry: &DirEntry) -> bool {
         let path = entry.path();
         let is_dir = path.is_dir();
         let path = path.strip_prefix(root).unwrap();
         let path = path.to_str().unwrap();
-        let mut paths = vec![path.to_string()];
-        if is_dir {
-            // FIXME: extra ugly stuff to w/a globs and avoid entering dir
-            paths.push(path.to_owned() + "/");
-            paths.push(path.to_owned() + "/*");
+        let is_excluded = patterns.is_excluded(&path.to_string(), is_dir);
+        if is_excluded {
+            debug!("Skipping {:?}", entry.path());
         }
-        for pattern in ignore_patterns {
-            for path in &paths {
-                if pattern.matches(path.as_str()) {
-                    debug!("Skipping {:?}", entry.path());
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn is_ignore_file(&self, entry: &DirEntry) -> bool {
-        let file_name = entry.file_name().to_str().unwrap().to_string();
-        self.ignore_files.contains(&file_name)
+        is_excluded
     }
 
     fn walk_with_root(&self, root: &PathBuf, path: &PathBuf) {
@@ -79,23 +63,22 @@ impl<'a> Walker<'a> {
                 .partition(|entry| self.is_ignore_file(entry));
             let ignore_files: Vec<PathBuf> =
                 ignore_files.iter().map(|entry| entry.path()).collect();
-            let (root_ignore_patterns, local_ignore_patterns) = ignore_files.to_patterns();
-            let local_ignore_patterns = {
+            let (root_patterns, local_patterns) = ignore_files.to_patterns();
+            let local_patterns = {
                 let mut patterns = self.ignore_patterns.clone();
-                patterns.extend(local_ignore_patterns);
-                patterns.dedup();
+                patterns.extend(&local_patterns);
                 patterns
             };
             let walker = Walker::new(
-                local_ignore_patterns.clone(),
+                local_patterns.clone(),
                 self.ignore_files,
                 self.regexp,
                 self.display,
             );
             for entry in entries
                 .iter()
-                .filter(|entry| !self.must_ignore(&root_ignore_patterns, root, entry))
-                .filter(|entry| !self.must_ignore(&local_ignore_patterns, root, entry))
+                .filter(|entry| !self.is_excluded(&root_patterns, root, entry))
+                .filter(|entry| !self.is_excluded(&local_patterns, root, entry))
             {
                 walker.walk_with_root(root, &entry.path());
             }
