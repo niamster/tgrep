@@ -20,6 +20,8 @@ lazy_static! {
 
 #[derive(Debug, StructOpt)]
 struct Cli {
+    #[structopt(short = "i")]
+    ignore_case: bool,
     #[structopt(long = "ignore")]
     ignore_patterns: Vec<String>,
     #[structopt(long = "ignore-file")]
@@ -50,9 +52,14 @@ fn main() -> CliResult {
     } else {
         args.ignore_files
     };
+    let regexp = if args.ignore_case {
+        "(?i)".to_string() + &args.regexp
+    } else {
+        args.regexp.clone()
+    };
     info!("regexp={:?}, paths={:?}", args.regexp, paths);
 
-    let regexp = Regex::new(args.regexp.as_str())?;
+    let regexp = Regex::new(regexp.as_str())?;
     let display = DisplayTerminal::new(MARGIN);
     let walker = Walker::new(ignore_patterns, &ignore_files, &regexp, &display);
     for path in paths {
