@@ -57,12 +57,11 @@ impl<'a> Walker<'a> {
         }
         let file_type = meta.unwrap().file_type();
         if file_type.is_dir() {
-            let (ignore_files, entries): (Vec<DirEntry>, Vec<DirEntry>) = fs::read_dir(path)
+            let (ignore_files, entries): (Vec<_>, Vec<_>) = fs::read_dir(path)
                 .unwrap()
                 .filter_map(|entry| entry.ok())
                 .partition(|entry| self.is_ignore_file(entry));
-            let ignore_files: Vec<PathBuf> =
-                ignore_files.iter().map(|entry| entry.path()).collect();
+            let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
             let (root_patterns, local_patterns) = ignore_files.to_patterns();
             let local_patterns = {
                 let mut patterns = self.ignore_patterns.clone();
