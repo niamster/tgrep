@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 
 use ansi_term::Colour;
-use regex;
 
 pub trait Display {
-    fn display(&self, path: &PathBuf, lno: u32, line: &String, needle: &regex::Match);
+    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match);
 }
 
 pub struct DisplayTerminal {
@@ -18,7 +17,7 @@ impl DisplayTerminal {
 }
 
 impl Display for DisplayTerminal {
-    fn display(&self, path: &PathBuf, lno: u32, line: &String, needle: &regex::Match) {
+    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match) {
         let (start, prefix) = if needle.start() > self.margin {
             (needle.start() - self.margin, "[...] ")
         } else {
