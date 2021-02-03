@@ -26,7 +26,7 @@ impl Patterns {
         self.blacklist.dedup();
     }
 
-    pub fn is_excluded(&self, path: &String, is_dir: bool) -> bool {
+    pub fn is_excluded(&self, path: &str, is_dir: bool) -> bool {
         let mut paths = vec![path.to_owned()];
         if is_dir {
             // FIXME: extra ugly stuff to w/a globs and avoid entering dir
@@ -60,27 +60,28 @@ impl ToPatterns for Vec<String> {
         let (mut root_patterns, mut patterns) = (Patterns::new(), Patterns::new());
         for pattern in self {
             let pattern = pattern.trim();
-            if pattern.starts_with("#") || pattern.is_empty() {
+            if pattern.starts_with('#') || pattern.is_empty() {
                 continue;
             }
-            let is_root = pattern.starts_with("/");
+            let is_root = pattern.starts_with('/');
             let pattern = if is_root {
-                pattern.strip_prefix("/").unwrap()
+                pattern.strip_prefix('/').unwrap()
             } else {
                 pattern
             };
-            let pattern = if pattern.ends_with("/") {
+            let pattern = if pattern.ends_with('/') {
                 pattern.to_owned() + "*"
             } else {
                 pattern.to_string()
             };
-            let whitelist = pattern.starts_with("!");
+            let whitelist = pattern.starts_with('!');
             let pattern = if whitelist {
                 &pattern[1..]
             } else {
                 pattern.as_str()
             };
             // FIXME: either implement better support of https://git-scm.com/docs/gitignore or use existing lib
+            #[allow(clippy::collapsible_if)]
             match Pattern::new(pattern) {
                 Ok(pattern) => {
                     if is_root {

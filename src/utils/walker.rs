@@ -12,7 +12,7 @@ use crate::utils::patterns::{Patterns, ToPatterns};
 
 pub struct Walker<'a> {
     ignore_patterns: Patterns,
-    ignore_files: &'a Vec<String>,
+    ignore_files: &'a [String],
     regexp: &'a Regex,
     display: &'a dyn Display,
 }
@@ -20,7 +20,7 @@ pub struct Walker<'a> {
 impl<'a> Walker<'a> {
     pub fn new(
         ignore_patterns: Patterns,
-        ignore_files: &'a Vec<String>,
+        ignore_files: &'a [String],
         regexp: &'a Regex,
         display: &'a dyn Display,
     ) -> Self {
@@ -42,7 +42,7 @@ impl<'a> Walker<'a> {
         let is_dir = path.is_dir();
         let path = path.strip_prefix(root).unwrap();
         let path = path.to_str().unwrap();
-        let is_excluded = patterns.is_excluded(&path.to_string(), is_dir);
+        let is_excluded = patterns.is_excluded(&path, is_dir);
         if is_excluded {
             debug!("Skipping {:?}", entry.path());
         }
@@ -84,11 +84,10 @@ impl<'a> Walker<'a> {
         } else if file_type.is_file() {
             match path.to_lines() {
                 Ok(lines) => {
-                    let mut lno: u32 = 0;
-                    for line in lines {
+                    for (lno, line) in lines.enumerate() {
                         match line {
                             Ok(line) => {
-                                if let Some(needle) = self.regexp.find(line.as_str()) {
+                                if let Some(needle) = self.regexp.find(&line) {
                                     self.display.display(&path, lno, &line, &needle)
                                 }
                             }
@@ -97,7 +96,6 @@ impl<'a> Walker<'a> {
                                 return;
                             }
                         }
-                        lno += 1;
                     }
                 }
                 Err(e) => error!("Failed to read '{}': {}", path.display(), e),
