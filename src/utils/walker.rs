@@ -91,10 +91,17 @@ impl<'a> Walker<'a> {
                                     self.display.display(&path, lno, &line, &needle)
                                 }
                             }
-                            Err(e) => {
-                                warn!("Failed to read '{}': {}", path.display(), e);
-                                return;
-                            }
+                            Err(e) => match e.kind() {
+                                std::io::ErrorKind::InvalidData => {
+                                    // Likely binary file
+                                    debug!("Failed to read '{}': {}", path.display(), e);
+                                    return;
+                                }
+                                _ => {
+                                    warn!("Failed to read '{}': {}", path.display(), e);
+                                    return;
+                                }
+                            },
                         }
                     }
                 }
