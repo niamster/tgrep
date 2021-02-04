@@ -37,19 +37,18 @@ impl<'a> Walker<'a> {
         self.ignore_files.contains(&file_name)
     }
 
-    fn is_excluded(&self, patterns: &Patterns, root: &PathBuf, entry: &DirEntry) -> bool {
+    fn is_excluded(&self, patterns: &Patterns, entry: &DirEntry) -> bool {
         let path = entry.path();
         let is_dir = path.is_dir();
-        let path = path.strip_prefix(root).unwrap();
         let path = path.to_str().unwrap();
         let is_excluded = patterns.is_excluded(&path, is_dir);
         if is_excluded {
-            debug!("Skipping {:?}", entry.path());
+            info!("Skipping {:?}", entry.path());
         }
         is_excluded
     }
 
-    fn walk_with_root(&self, root: &PathBuf, path: &PathBuf) {
+    pub fn walk(&self, path: &PathBuf) {
         let meta = fs::metadata(path.as_path());
         if let Err(e) = meta {
             error!("Failed to get path '{}' metadata: {}", path.display(), e);
@@ -62,24 +61,19 @@ impl<'a> Walker<'a> {
                 .filter_map(|entry| entry.ok())
                 .partition(|entry| self.is_ignore_file(entry));
             let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
-            let (root_patterns, local_patterns) = ignore_files.to_patterns();
-            let local_patterns = {
-                let mut patterns = self.ignore_patterns.clone();
-                patterns.extend(&local_patterns);
-                patterns
-            };
+            let mut ignore_patterns = ignore_files.to_patterns();
+            ignore_patterns.extend(&self.ignore_patterns);
             let walker = Walker::new(
-                local_patterns.clone(),
+                ignore_patterns.clone(),
                 self.ignore_files,
                 self.regexp,
                 self.display,
             );
             for entry in entries
                 .iter()
-                .filter(|entry| !self.is_excluded(&root_patterns, root, entry))
-                .filter(|entry| !self.is_excluded(&local_patterns, root, entry))
+                .filter(|entry| !self.is_excluded(&ignore_patterns, entry))
             {
-                walker.walk_with_root(root, &entry.path());
+                walker.walk(&entry.path());
             }
         } else if file_type.is_file() {
             match path.to_lines() {
@@ -115,9 +109,5 @@ impl<'a> Walker<'a> {
         } else {
             warn!("Unhandled path '{}': {:?}", path.display(), file_type)
         }
-    }
-
-    pub fn walk(&self, path: &PathBuf) {
-        self.walk_with_root(path, path)
     }
 }

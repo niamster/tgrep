@@ -8,7 +8,7 @@ use structopt::StructOpt;
 mod utils;
 
 use crate::utils::display::DisplayTerminal;
-use crate::utils::patterns::ToPatterns;
+use crate::utils::patterns::Patterns;
 use crate::utils::walker::Walker;
 
 const MARGIN: usize = 64;
@@ -42,10 +42,10 @@ fn main() -> CliResult {
     } else {
         args.paths
     };
-    let (_, ignore_patterns) = if args.ignore_patterns.is_empty() {
-        DEFAULT_IGNORE_PATTERNS.to_patterns()
+    let ignore_patterns = if args.ignore_patterns.is_empty() {
+        DEFAULT_IGNORE_PATTERNS.clone()
     } else {
-        args.ignore_patterns.to_patterns()
+        args.ignore_patterns
     };
     let ignore_files = if args.ignore_files.is_empty() {
         DEFAULT_IGNORE_FILES.clone()
@@ -58,8 +58,10 @@ fn main() -> CliResult {
         .case_insensitive(args.ignore_case)
         .build()?;
     let display = DisplayTerminal::new(MARGIN);
-    let walker = Walker::new(ignore_patterns, &ignore_files, &regexp, &display);
     for path in paths {
+        let path = path.as_path().canonicalize().unwrap();
+        let ignore_patterns = Patterns::new(&path.as_path().to_str().unwrap(), &ignore_patterns);
+        let walker = Walker::new(ignore_patterns, &ignore_files, &regexp, &display);
         walker.walk(&path);
     }
 
