@@ -2,7 +2,7 @@ use std::{env, path::PathBuf};
 
 use lazy_static::lazy_static;
 use quicli::prelude::*;
-use regex::Regex;
+use regex::RegexBuilder;
 use structopt::StructOpt;
 
 mod utils;
@@ -52,14 +52,11 @@ fn main() -> CliResult {
     } else {
         args.ignore_files
     };
-    let regexp = if args.ignore_case {
-        "(?i)".to_string() + &args.regexp
-    } else {
-        args.regexp.clone()
-    };
     info!("regexp={:?}, paths={:?}", args.regexp, paths);
 
-    let regexp = Regex::new(regexp.as_str())?;
+    let regexp = RegexBuilder::new(args.regexp.as_str())
+        .case_insensitive(args.ignore_case)
+        .build()?;
     let display = DisplayTerminal::new(MARGIN);
     let walker = Walker::new(ignore_patterns, &ignore_files, &regexp, &display);
     for path in paths {
