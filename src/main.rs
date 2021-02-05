@@ -14,7 +14,7 @@ use crate::utils::walker::Walker;
 const MARGIN: usize = 64;
 
 lazy_static! {
-    static ref DEFAULT_IGNORE_PATTERNS: Vec<String> = vec![".git".to_string()];
+    static ref DEFAULT_IGNORE_PATTERNS: Vec<String> = vec![".git/".to_string()];
     static ref DEFAULT_IGNORE_FILES: Vec<String> = vec![".gitignore".to_string()];
 }
 
