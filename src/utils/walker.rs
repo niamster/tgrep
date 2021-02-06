@@ -15,6 +15,7 @@ use crate::utils::patterns::{Patterns, ToPatterns};
 
 #[derive(Clone)]
 pub struct Walker {
+    tpool: ThreadPool,
     ignore_patterns: Patterns,
     ignore_files: Vec<String>,
     regexp: Regex,
@@ -23,12 +24,14 @@ pub struct Walker {
 
 impl Walker {
     pub fn new(
+        tpool: ThreadPool,
         ignore_patterns: Patterns,
         ignore_files: Vec<String>,
         regexp: Regex,
         display: Arc<dyn Display>,
     ) -> Self {
         Walker {
+            tpool,
             ignore_patterns,
             ignore_files,
             regexp,
@@ -80,7 +83,7 @@ impl Walker {
         }
     }
 
-    pub fn walk(&self, tpool: &ThreadPool, path: &PathBuf) {
+    pub fn walk(&self, path: &PathBuf) {
         let meta = fs::metadata(path.as_path());
         if let Err(e) = meta {
             error!("Failed to get path '{}' metadata: {}", path.display(), e);
@@ -96,6 +99,7 @@ impl Walker {
             let mut ignore_patterns = ignore_files.to_patterns();
             ignore_patterns.extend(&self.ignore_patterns);
             let walker = Walker::new(
+                self.tpool.clone(),
                 ignore_patterns.clone(),
                 self.ignore_files.clone(),
                 self.regexp.clone(),
@@ -114,12 +118,12 @@ impl Walker {
                             let regexp = self.regexp.clone();
                             let display = self.display.clone();
                             let wg = wg.clone();
-                            tpool.spawn_ok(async move {
+                            self.tpool.spawn_ok(async move {
                                 Walker::grep(&path, regexp, display);
                                 drop(wg);
                             });
                         } else {
-                            walker.walk(tpool, &entry.path());
+                            walker.walk(&entry.path());
                         }
                     }
                     Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),

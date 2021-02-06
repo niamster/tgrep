@@ -64,12 +64,13 @@ fn main() -> CliResult {
         let path = path.as_path().canonicalize().unwrap();
         let ignore_patterns = Patterns::new(&path.as_path().to_str().unwrap(), &ignore_patterns);
         let walker = Walker::new(
+            tpool.clone(),
             ignore_patterns,
             ignore_files.clone(),
             regexp.clone(),
             Arc::new(display.clone()),
         );
-        walker.walk(&tpool, &path);
+        walker.walk(&path);
     }
 
     Ok(())
