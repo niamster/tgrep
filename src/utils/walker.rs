@@ -1,10 +1,10 @@
 use std::{
     fs::{self, DirEntry},
     path::PathBuf,
-    sync::mpsc::channel,
     sync::Arc,
 };
 
+use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
 use quicli::prelude::*;
 use regex::Regex;
@@ -101,8 +101,7 @@ impl Walker {
                 self.regexp.clone(),
                 self.display.clone(),
             );
-            let (tx, rx) = channel();
-            let mut tasks = 0;
+            let wg = WaitGroup::new();
             for entry in entries
                 .into_iter()
                 .filter(|entry| !self.is_excluded(&ignore_patterns, entry))
@@ -113,11 +112,10 @@ impl Walker {
                         if file_type.is_file() {
                             let regexp = self.regexp.clone();
                             let display = self.display.clone();
-                            tasks += 1;
-                            let tx = tx.clone();
+                            let wg = wg.clone();
                             tpool.spawn_ok(async move {
                                 Walker::grep(Box::new(entry.path()), regexp, display);
-                                tx.send(()).unwrap();
+                                drop(wg);
                             });
                         } else {
                             walker.walk(tpool, &entry.path());
@@ -126,7 +124,7 @@ impl Walker {
                     Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
                 }
             }
-            rx.iter().take(tasks).for_each(drop);
+            wg.wait();
         } else if file_type.is_file() {
             Walker::grep(
                 Box::new(path.to_path_buf()),
