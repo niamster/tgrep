@@ -16,17 +16,17 @@ use crate::utils::patterns::{Patterns, ToPatterns};
 #[derive(Clone)]
 pub struct Walker {
     ignore_patterns: Patterns,
-    ignore_files: Box<Vec<String>>,
-    regexp: Box<Regex>,
-    display: Arc<Box<dyn Display>>,
+    ignore_files: Vec<String>,
+    regexp: Regex,
+    display: Arc<dyn Display>,
 }
 
 impl Walker {
     pub fn new(
         ignore_patterns: Patterns,
-        ignore_files: Box<Vec<String>>,
-        regexp: Box<Regex>,
-        display: Arc<Box<dyn Display>>,
+        ignore_files: Vec<String>,
+        regexp: Regex,
+        display: Arc<dyn Display>,
     ) -> Self {
         Walker {
             ignore_patterns,
@@ -52,7 +52,7 @@ impl Walker {
         is_excluded
     }
 
-    fn grep(path: Box<PathBuf>, regexp: Box<Regex>, display: Arc<Box<dyn Display>>) {
+    fn grep(path: &PathBuf, regexp: Regex, display: Arc<dyn Display>) {
         match path.to_lines() {
             Ok(lines) => {
                 for (lno, line) in lines.enumerate() {
@@ -103,18 +103,19 @@ impl Walker {
             );
             let wg = WaitGroup::new();
             for entry in entries
-                .into_iter()
+                .iter()
                 .filter(|entry| !self.is_excluded(&ignore_patterns, entry))
             {
                 match entry.metadata() {
                     Ok(meta) => {
                         let file_type = meta.file_type();
                         if file_type.is_file() {
+                            let path = entry.path();
                             let regexp = self.regexp.clone();
                             let display = self.display.clone();
                             let wg = wg.clone();
                             tpool.spawn_ok(async move {
-                                Walker::grep(Box::new(entry.path()), regexp, display);
+                                Walker::grep(&path, regexp, display);
                                 drop(wg);
                             });
                         } else {
@@ -126,11 +127,7 @@ impl Walker {
             }
             wg.wait();
         } else if file_type.is_file() {
-            Walker::grep(
-                Box::new(path.to_path_buf()),
-                self.regexp.clone(),
-                self.display.clone(),
-            );
+            Walker::grep(path, self.regexp.clone(), self.display.clone());
         } else if file_type.is_symlink() {
             error!(
                 "Symlinks are not (yet) supported, skipping '{}'",

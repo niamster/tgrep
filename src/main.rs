@@ -65,9 +65,9 @@ fn main() -> CliResult {
         let ignore_patterns = Patterns::new(&path.as_path().to_str().unwrap(), &ignore_patterns);
         let walker = Walker::new(
             ignore_patterns,
-            Box::new(ignore_files.clone()),
-            Box::new(regexp.clone()),
-            Arc::new(Box::new(display.clone())),
+            ignore_files.clone(),
+            regexp.clone(),
+            Arc::new(display.clone()),
         );
         walker.walk(&tpool, &path);
     }
