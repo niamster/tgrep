@@ -1,13 +1,13 @@
 use std::{
     fs::{self, DirEntry},
     path::PathBuf,
+    sync::mpsc::channel,
     sync::Arc,
-    thread,
 };
 
+use futures::executor::ThreadPool;
 use quicli::prelude::*;
 use regex::Regex;
-use tokio::task;
 
 use crate::utils::display::Display;
 use crate::utils::lines::ToLines;
@@ -52,39 +52,35 @@ impl Walker {
         is_excluded
     }
 
-    #[tokio::main]
-    async fn grep(path: Box<PathBuf>, regexp: Box<Regex>, display: Arc<Box<dyn Display>>) {
-        let handle = task::spawn(async move {
-            match path.to_lines() {
-                Ok(lines) => {
-                    for (lno, line) in lines.enumerate() {
-                        match line {
-                            Ok(line) => {
-                                if let Some(needle) = regexp.find(&line) {
-                                    display.display(&path, lno, &line, &needle)
-                                }
+    fn grep(path: Box<PathBuf>, regexp: Box<Regex>, display: Arc<Box<dyn Display>>) {
+        match path.to_lines() {
+            Ok(lines) => {
+                for (lno, line) in lines.enumerate() {
+                    match line {
+                        Ok(line) => {
+                            if let Some(needle) = regexp.find(&line) {
+                                display.display(&path, lno, &line, &needle)
                             }
-                            Err(e) => match e.kind() {
-                                std::io::ErrorKind::InvalidData => {
-                                    // Likely binary file
-                                    debug!("Failed to read '{}': {}", path.display(), e);
-                                    return;
-                                }
-                                _ => {
-                                    warn!("Failed to read '{}': {}", path.display(), e);
-                                    return;
-                                }
-                            },
                         }
+                        Err(e) => match e.kind() {
+                            std::io::ErrorKind::InvalidData => {
+                                // Likely binary file
+                                debug!("Failed to read '{}': {}", path.display(), e);
+                                return;
+                            }
+                            _ => {
+                                warn!("Failed to read '{}': {}", path.display(), e);
+                                return;
+                            }
+                        },
                     }
                 }
-                Err(e) => error!("Failed to read '{}': {}", path.display(), e),
             }
-        });
-        handle.await.unwrap();
+            Err(e) => error!("Failed to read '{}': {}", path.display(), e),
+        }
     }
 
-    pub fn walk(&self, path: &PathBuf) {
+    pub fn walk(&self, tpool: &ThreadPool, path: &PathBuf) {
         let meta = fs::metadata(path.as_path());
         if let Err(e) = meta {
             error!("Failed to get path '{}' metadata: {}", path.display(), e);
@@ -105,7 +101,8 @@ impl Walker {
                 self.regexp.clone(),
                 self.display.clone(),
             );
-            let mut tasks = vec![];
+            let (tx, rx) = channel();
+            let mut tasks = 0;
             for entry in entries
                 .into_iter()
                 .filter(|entry| !self.is_excluded(&ignore_patterns, entry))
@@ -116,20 +113,20 @@ impl Walker {
                         if file_type.is_file() {
                             let regexp = self.regexp.clone();
                             let display = self.display.clone();
-                            let join = thread::spawn(move || {
+                            tasks += 1;
+                            let tx = tx.clone();
+                            tpool.spawn_ok(async move {
                                 Walker::grep(Box::new(entry.path()), regexp, display);
+                                tx.send(()).unwrap();
                             });
-                            tasks.push(join);
                         } else {
-                            walker.walk(&entry.path());
+                            walker.walk(tpool, &entry.path());
                         }
                     }
                     Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
                 }
             }
-            for task in tasks {
-                task.join().unwrap();
-            }
+            rx.iter().take(tasks).for_each(drop);
         } else if file_type.is_file() {
             Walker::grep(
                 Box::new(path.to_path_buf()),
