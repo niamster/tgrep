@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, sync::Arc};
 
 use lazy_static::lazy_static;
 use quicli::prelude::*;
@@ -61,7 +61,12 @@ fn main() -> CliResult {
     for path in paths {
         let path = path.as_path().canonicalize().unwrap();
         let ignore_patterns = Patterns::new(&path.as_path().to_str().unwrap(), &ignore_patterns);
-        let walker = Walker::new(ignore_patterns, &ignore_files, &regexp, &display);
+        let walker = Walker::new(
+            ignore_patterns,
+            Box::new(ignore_files.clone()),
+            Box::new(regexp.clone()),
+            Arc::new(Box::new(display.clone())),
+        );
         walker.walk(&path);
     }
 

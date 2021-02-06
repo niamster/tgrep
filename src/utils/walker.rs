@@ -1,28 +1,32 @@
 use std::{
     fs::{self, DirEntry},
     path::PathBuf,
+    sync::Arc,
+    thread,
 };
 
 use quicli::prelude::*;
 use regex::Regex;
+use tokio::task;
 
 use crate::utils::display::Display;
 use crate::utils::lines::ToLines;
 use crate::utils::patterns::{Patterns, ToPatterns};
 
-pub struct Walker<'a> {
+#[derive(Clone)]
+pub struct Walker {
     ignore_patterns: Patterns,
-    ignore_files: &'a [String],
-    regexp: &'a Regex,
-    display: &'a dyn Display,
+    ignore_files: Box<Vec<String>>,
+    regexp: Box<Regex>,
+    display: Arc<Box<dyn Display>>,
 }
 
-impl<'a> Walker<'a> {
+impl Walker {
     pub fn new(
         ignore_patterns: Patterns,
-        ignore_files: &'a [String],
-        regexp: &'a Regex,
-        display: &'a dyn Display,
+        ignore_files: Box<Vec<String>>,
+        regexp: Box<Regex>,
+        display: Arc<Box<dyn Display>>,
     ) -> Self {
         Walker {
             ignore_patterns,
@@ -48,41 +52,16 @@ impl<'a> Walker<'a> {
         is_excluded
     }
 
-    pub fn walk(&self, path: &PathBuf) {
-        let meta = fs::metadata(path.as_path());
-        if let Err(e) = meta {
-            error!("Failed to get path '{}' metadata: {}", path.display(), e);
-            return;
-        }
-        let file_type = meta.unwrap().file_type();
-        if file_type.is_dir() {
-            let (ignore_files, entries): (Vec<_>, Vec<_>) = fs::read_dir(path)
-                .unwrap()
-                .filter_map(|entry| entry.ok())
-                .partition(|entry| self.is_ignore_file(entry));
-            let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
-            let mut ignore_patterns = ignore_files.to_patterns();
-            ignore_patterns.extend(&self.ignore_patterns);
-            let walker = Walker::new(
-                ignore_patterns.clone(),
-                self.ignore_files,
-                self.regexp,
-                self.display,
-            );
-            for entry in entries
-                .iter()
-                .filter(|entry| !self.is_excluded(&ignore_patterns, entry))
-            {
-                walker.walk(&entry.path());
-            }
-        } else if file_type.is_file() {
+    #[tokio::main]
+    async fn grep(path: Box<PathBuf>, regexp: Box<Regex>, display: Arc<Box<dyn Display>>) {
+        let handle = task::spawn(async move {
             match path.to_lines() {
                 Ok(lines) => {
                     for (lno, line) in lines.enumerate() {
                         match line {
                             Ok(line) => {
-                                if let Some(needle) = self.regexp.find(&line) {
-                                    self.display.display(&path, lno, &line, &needle)
+                                if let Some(needle) = regexp.find(&line) {
+                                    display.display(&path, lno, &line, &needle)
                                 }
                             }
                             Err(e) => match e.kind() {
@@ -101,6 +80,62 @@ impl<'a> Walker<'a> {
                 }
                 Err(e) => error!("Failed to read '{}': {}", path.display(), e),
             }
+        });
+        handle.await.unwrap();
+    }
+
+    pub fn walk(&self, path: &PathBuf) {
+        let meta = fs::metadata(path.as_path());
+        if let Err(e) = meta {
+            error!("Failed to get path '{}' metadata: {}", path.display(), e);
+            return;
+        }
+        let file_type = meta.unwrap().file_type();
+        if file_type.is_dir() {
+            let (ignore_files, entries): (Vec<_>, Vec<_>) = fs::read_dir(path)
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .partition(|entry| self.is_ignore_file(entry));
+            let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
+            let mut ignore_patterns = ignore_files.to_patterns();
+            ignore_patterns.extend(&self.ignore_patterns);
+            let walker = Walker::new(
+                ignore_patterns.clone(),
+                self.ignore_files.clone(),
+                self.regexp.clone(),
+                self.display.clone(),
+            );
+            let mut tasks = vec![];
+            for entry in entries
+                .into_iter()
+                .filter(|entry| !self.is_excluded(&ignore_patterns, entry))
+            {
+                match entry.metadata() {
+                    Ok(meta) => {
+                        let file_type = meta.file_type();
+                        if file_type.is_file() {
+                            let regexp = self.regexp.clone();
+                            let display = self.display.clone();
+                            let join = thread::spawn(move || {
+                                Walker::grep(Box::new(entry.path()), regexp, display);
+                            });
+                            tasks.push(join);
+                        } else {
+                            walker.walk(&entry.path());
+                        }
+                    }
+                    Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
+                }
+            }
+            for task in tasks {
+                task.join().unwrap();
+            }
+        } else if file_type.is_file() {
+            Walker::grep(
+                Box::new(path.to_path_buf()),
+                self.regexp.clone(),
+                self.display.clone(),
+            );
         } else if file_type.is_symlink() {
             error!(
                 "Symlinks are not (yet) supported, skipping '{}'",

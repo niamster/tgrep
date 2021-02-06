@@ -2,10 +2,11 @@ use std::path::PathBuf;
 
 use ansi_term::Colour;
 
-pub trait Display {
+pub trait Display: Send + Sync {
     fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match);
 }
 
+#[derive(Clone)]
 pub struct DisplayTerminal {
     margin: usize,
 }
