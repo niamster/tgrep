@@ -1,5 +1,6 @@
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, sync::Arc};
 
+use futures::executor::ThreadPool;
 use lazy_static::lazy_static;
 use quicli::prelude::*;
 use regex::RegexBuilder;
@@ -58,10 +59,17 @@ fn main() -> CliResult {
         .case_insensitive(args.ignore_case)
         .build()?;
     let display = DisplayTerminal::new(MARGIN);
+    let tpool = ThreadPool::new()?;
     for path in paths {
         let path = path.as_path().canonicalize().unwrap();
         let ignore_patterns = Patterns::new(&path.as_path().to_str().unwrap(), &ignore_patterns);
-        let walker = Walker::new(ignore_patterns, &ignore_files, &regexp, &display);
+        let walker = Walker::new(
+            tpool.clone(),
+            ignore_patterns,
+            ignore_files.clone(),
+            regexp.clone(),
+            Arc::new(display.clone()),
+        );
         walker.walk(&path);
     }
 

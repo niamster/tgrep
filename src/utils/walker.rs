@@ -1,8 +1,11 @@
 use std::{
     fs::{self, DirEntry},
     path::PathBuf,
+    sync::Arc,
 };
 
+use crossbeam::sync::WaitGroup;
+use futures::executor::ThreadPool;
 use quicli::prelude::*;
 use regex::Regex;
 
@@ -10,21 +13,25 @@ use crate::utils::display::Display;
 use crate::utils::lines::ToLines;
 use crate::utils::patterns::{Patterns, ToPatterns};
 
-pub struct Walker<'a> {
+#[derive(Clone)]
+pub struct Walker {
+    tpool: ThreadPool,
     ignore_patterns: Patterns,
-    ignore_files: &'a [String],
-    regexp: &'a Regex,
-    display: &'a dyn Display,
+    ignore_files: Vec<String>,
+    regexp: Regex,
+    display: Arc<dyn Display>,
 }
 
-impl<'a> Walker<'a> {
+impl Walker {
     pub fn new(
+        tpool: ThreadPool,
         ignore_patterns: Patterns,
-        ignore_files: &'a [String],
-        regexp: &'a Regex,
-        display: &'a dyn Display,
+        ignore_files: Vec<String>,
+        regexp: Regex,
+        display: Arc<dyn Display>,
     ) -> Self {
         Walker {
+            tpool,
             ignore_patterns,
             ignore_files,
             regexp,
@@ -48,6 +55,34 @@ impl<'a> Walker<'a> {
         is_excluded
     }
 
+    fn grep(path: &PathBuf, regexp: Regex, display: Arc<dyn Display>) {
+        match path.to_lines() {
+            Ok(lines) => {
+                for (lno, line) in lines.enumerate() {
+                    match line {
+                        Ok(line) => {
+                            if let Some(needle) = regexp.find(&line) {
+                                display.display(&path, lno, &line, &needle)
+                            }
+                        }
+                        Err(e) => match e.kind() {
+                            std::io::ErrorKind::InvalidData => {
+                                // Likely binary file
+                                debug!("Failed to read '{}': {}", path.display(), e);
+                                return;
+                            }
+                            _ => {
+                                warn!("Failed to read '{}': {}", path.display(), e);
+                                return;
+                            }
+                        },
+                    }
+                }
+            }
+            Err(e) => error!("Failed to read '{}': {}", path.display(), e),
+        }
+    }
+
     pub fn walk(&self, path: &PathBuf) {
         let meta = fs::metadata(path.as_path());
         if let Err(e) = meta {
@@ -64,43 +99,39 @@ impl<'a> Walker<'a> {
             let mut ignore_patterns = ignore_files.to_patterns();
             ignore_patterns.extend(&self.ignore_patterns);
             let walker = Walker::new(
+                self.tpool.clone(),
                 ignore_patterns.clone(),
-                self.ignore_files,
-                self.regexp,
-                self.display,
+                self.ignore_files.clone(),
+                self.regexp.clone(),
+                self.display.clone(),
             );
+            let wg = WaitGroup::new();
             for entry in entries
                 .iter()
                 .filter(|entry| !self.is_excluded(&ignore_patterns, entry))
             {
-                walker.walk(&entry.path());
-            }
-        } else if file_type.is_file() {
-            match path.to_lines() {
-                Ok(lines) => {
-                    for (lno, line) in lines.enumerate() {
-                        match line {
-                            Ok(line) => {
-                                if let Some(needle) = self.regexp.find(&line) {
-                                    self.display.display(&path, lno, &line, &needle)
-                                }
-                            }
-                            Err(e) => match e.kind() {
-                                std::io::ErrorKind::InvalidData => {
-                                    // Likely binary file
-                                    debug!("Failed to read '{}': {}", path.display(), e);
-                                    return;
-                                }
-                                _ => {
-                                    warn!("Failed to read '{}': {}", path.display(), e);
-                                    return;
-                                }
-                            },
+                match entry.metadata() {
+                    Ok(meta) => {
+                        let file_type = meta.file_type();
+                        if file_type.is_file() {
+                            let path = entry.path();
+                            let regexp = self.regexp.clone();
+                            let display = self.display.clone();
+                            let wg = wg.clone();
+                            self.tpool.spawn_ok(async move {
+                                Walker::grep(&path, regexp, display);
+                                drop(wg);
+                            });
+                        } else {
+                            walker.walk(&entry.path());
                         }
                     }
+                    Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
                 }
-                Err(e) => error!("Failed to read '{}': {}", path.display(), e),
             }
+            wg.wait();
+        } else if file_type.is_file() {
+            Walker::grep(path, self.regexp.clone(), self.display.clone());
         } else if file_type.is_symlink() {
             error!(
                 "Symlinks are not (yet) supported, skipping '{}'",

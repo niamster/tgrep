@@ -1,18 +1,26 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use ansi_term::Colour;
 
-pub trait Display {
+pub trait Display: Send + Sync {
     fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match);
 }
 
+#[derive(Clone)]
 pub struct DisplayTerminal {
+    lock: Arc<Mutex<()>>,
     margin: usize,
 }
 
 impl DisplayTerminal {
     pub fn new(margin: usize) -> Self {
-        DisplayTerminal { margin }
+        DisplayTerminal {
+            lock: Arc::new(Mutex::new(())),
+            margin,
+        }
     }
 }
 
@@ -31,7 +39,7 @@ impl Display for DisplayTerminal {
         let before = &line[start..needle.start()];
         let what = &line[needle.start()..needle.end()];
         let after = &line[needle.end()..end];
-        println!(
+        let formated = format!(
             "{}:{} {}{}{}{}{}",
             Colour::Blue.paint(path.to_str().unwrap()),
             Colour::Green.paint(lno.to_string()),
@@ -41,5 +49,8 @@ impl Display for DisplayTerminal {
             after,
             Colour::Purple.paint(suffix),
         );
+        let guard = self.lock.lock();
+        println!("{}", formated);
+        drop(guard);
     }
 }
