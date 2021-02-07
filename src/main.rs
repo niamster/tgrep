@@ -1,7 +1,6 @@
 use std::{env, path::PathBuf, sync::Arc};
 
 use futures::executor::ThreadPool;
-use lazy_static::lazy_static;
 use quicli::prelude::*;
 use regex::RegexBuilder;
 use structopt::StructOpt;
@@ -12,18 +11,21 @@ use crate::utils::display::DisplayTerminal;
 use crate::utils::patterns::Patterns;
 use crate::utils::walker::Walker;
 
-lazy_static! {
-    static ref DEFAULT_IGNORE_PATTERNS: Vec<String> = vec![".git/".to_string()];
-    static ref DEFAULT_IGNORE_FILES: Vec<String> = vec![".gitignore".to_string()];
-}
-
 #[derive(Debug, StructOpt)]
 struct Cli {
-    #[structopt(short = "i")]
+    #[structopt(short = "i", help = "Case-insensitive search")]
     ignore_case: bool,
-    #[structopt(long = "ignore")]
+    #[structopt(
+        long = "ignore",
+        default_value = ".git/",
+        help = "Default ignore pattern"
+    )]
     ignore_patterns: Vec<String>,
-    #[structopt(long = "ignore-file")]
+    #[structopt(
+        long = "ignore-file",
+        default_value = ".gitignore",
+        help = "Default ignore file name"
+    )]
     ignore_files: Vec<String>,
     regexp: String,
     #[structopt(parse(from_os_str))]
@@ -41,16 +43,6 @@ fn main() -> CliResult {
     } else {
         args.paths
     };
-    let ignore_patterns = if args.ignore_patterns.is_empty() {
-        DEFAULT_IGNORE_PATTERNS.clone()
-    } else {
-        args.ignore_patterns
-    };
-    let ignore_files = if args.ignore_files.is_empty() {
-        DEFAULT_IGNORE_FILES.clone()
-    } else {
-        args.ignore_files
-    };
     info!("regexp={:?}, paths={:?}", args.regexp, paths);
 
     let regexp = RegexBuilder::new(args.regexp.as_str())
@@ -65,11 +57,12 @@ fn main() -> CliResult {
     let tpool = ThreadPool::new()?;
     for path in paths {
         let path = path.as_path().canonicalize().unwrap();
-        let ignore_patterns = Patterns::new(&path.as_path().to_str().unwrap(), &ignore_patterns);
+        let ignore_patterns =
+            Patterns::new(&path.as_path().to_str().unwrap(), &args.ignore_patterns);
         let walker = Walker::new(
             tpool.clone(),
             ignore_patterns,
-            ignore_files.clone(),
+            args.ignore_files.clone(),
             regexp.clone(),
             Arc::new(display.clone()),
         );
