@@ -12,8 +12,6 @@ use crate::utils::display::DisplayTerminal;
 use crate::utils::patterns::Patterns;
 use crate::utils::walker::Walker;
 
-const MARGIN: usize = 64;
-
 lazy_static! {
     static ref DEFAULT_IGNORE_PATTERNS: Vec<String> = vec![".git/".to_string()];
     static ref DEFAULT_IGNORE_FILES: Vec<String> = vec![".gitignore".to_string()];
@@ -58,7 +56,12 @@ fn main() -> CliResult {
     let regexp = RegexBuilder::new(args.regexp.as_str())
         .case_insensitive(args.ignore_case)
         .build()?;
-    let display = DisplayTerminal::new(MARGIN);
+    let width = if let Some((width, _)) = term_size::dimensions() {
+        width
+    } else {
+        usize::MAX
+    };
+    let display = DisplayTerminal::new(width);
     let tpool = ThreadPool::new()?;
     for path in paths {
         let path = path.as_path().canonicalize().unwrap();

@@ -1,9 +1,12 @@
 use std::{
+    cmp,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
 use ansi_term::Colour;
+
+type Range = std::ops::Range<usize>;
 
 pub trait Display: Send + Sync {
     fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match);
@@ -12,45 +15,156 @@ pub trait Display: Send + Sync {
 #[derive(Clone)]
 pub struct DisplayTerminal {
     lock: Arc<Mutex<()>>,
-    margin: usize,
+    width: usize,
+    colour: bool,
 }
 
 impl DisplayTerminal {
-    pub fn new(margin: usize) -> Self {
+    pub fn new(width: usize) -> Self {
         DisplayTerminal {
             lock: Arc::new(Mutex::new(())),
-            margin,
+            width,
+            colour: true,
+        }
+    }
+
+    fn format(
+        width: usize,
+        path: &str,
+        lno: usize,
+        line: &str,
+        needle: Range,
+        colour: bool,
+    ) -> String {
+        assert!(needle.end > needle.start);
+        assert!(needle.end <= line.len());
+        let lno = lno.to_string();
+        let needle_len = needle.end - needle.start;
+        let width = if colour {
+            width
+        } else {
+            width - 2 // -2 for `[]` in format
+        };
+        let preambule_len = path.len() + lno.len() + 2; // +2 for `: ` in format
+        let width = cmp::max(width, preambule_len + needle_len);
+        let width = width - preambule_len;
+        let width = if width < needle_len {
+            needle_len
+        } else {
+            width
+        };
+        let (left_margin, right_margin) = if width == needle_len {
+            (usize::MAX, usize::MAX)
+        } else if needle.start < width / 2 {
+            let left_margin = cmp::min(needle.start, (width - needle_len) / 2);
+            let right_margin = width - needle_len - left_margin;
+            (left_margin, right_margin)
+        } else {
+            let right_margin = cmp::min(line.len() - needle.end, (width - needle_len) / 2);
+            let left_margin = width - needle_len - right_margin;
+            (left_margin, right_margin)
+        };
+        let (start, prefix) = if left_margin == usize::MAX {
+            (needle.start, "")
+        } else if needle.start > left_margin {
+            let prefix = "[...] ";
+            (needle.start - left_margin + prefix.len(), prefix)
+        } else {
+            (0, "")
+        };
+        let (end, suffix) = if right_margin == usize::MAX {
+            (needle.end, "")
+        } else if line.len() - needle.end > right_margin {
+            let suffix = " [...]";
+            (needle.end + right_margin - suffix.len(), suffix)
+        } else {
+            (line.len(), "")
+        };
+        let before = &line[start..needle.start];
+        let what = &line[needle.start..needle.end];
+        let after = &line[needle.end..end];
+        if colour {
+            format!(
+                "{}:{} {}{}{}{}{}",
+                Colour::Blue.paint(path),
+                Colour::Green.paint(lno),
+                Colour::Purple.paint(prefix),
+                before,
+                Colour::Red.paint(what),
+                after,
+                Colour::Purple.paint(suffix),
+            )
+        } else {
+            format!(
+                "{}:{} {}{}[{}]{}{}",
+                path, lno, prefix, before, what, after, suffix,
+            )
         }
     }
 }
 
 impl Display for DisplayTerminal {
     fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match) {
-        let (start, prefix) = if needle.start() > self.margin {
-            (needle.start() - self.margin, "[...] ")
-        } else {
-            (0, "")
-        };
-        let (end, suffix) = if line.len() - needle.end() > self.margin {
-            (needle.end() + self.margin, " [...]")
-        } else {
-            (line.len(), "")
-        };
-        let before = &line[start..needle.start()];
-        let what = &line[needle.start()..needle.end()];
-        let after = &line[needle.end()..end];
-        let formated = format!(
-            "{}:{} {}{}{}{}{}",
-            Colour::Blue.paint(path.to_str().unwrap()),
-            Colour::Green.paint(lno.to_string()),
-            Colour::Purple.paint(prefix),
-            before,
-            Colour::Red.paint(what),
-            after,
-            Colour::Purple.paint(suffix),
+        let formated = DisplayTerminal::format(
+            self.width,
+            path.to_str().unwrap(),
+            lno,
+            line,
+            Range {
+                start: needle.start(),
+                end: needle.end(),
+            },
+            self.colour,
         );
         let guard = self.lock.lock();
         println!("{}", formated);
         drop(guard);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_format() {
+        let test = |width, len, needle: Range, start, end, prefix, suffix| {
+            let prefix = if prefix { "[...] " } else { "" };
+            let suffix = if suffix { " [...]" } else { "" };
+            let needle_len = needle.end - needle.start;
+            let formated = format!(
+                "/:0 {}{}[{}]{}{}",
+                prefix,
+                "-".repeat(start),
+                "-".repeat(needle_len),
+                "-".repeat(end),
+                suffix,
+            );
+            assert_eq!(
+                formated,
+                DisplayTerminal::format(width, "/", 0, &"-".repeat(len), needle, false),
+            );
+            assert_eq!(
+                if len < width - 2 - 4 {
+                    len + 2 + 4
+                } else if needle_len > width {
+                    needle_len + 2 + 4
+                } else {
+                    width
+                },
+                formated.len()
+            );
+        };
+        test(40, 80, Range { start: 4, end: 5 }, 4, 23, false, true);
+        test(40, 80, Range { start: 64, end: 65 }, 12, 15, true, false);
+        test(40, 80, Range { start: 34, end: 45 }, 6, 5, true, true);
+        test(40, 80, Range { start: 4, end: 45 }, 0, 0, false, false);
+        test(40, 80, Range { start: 4, end: 75 }, 0, 0, false, false);
+        test(120, 80, Range { start: 4, end: 75 }, 4, 5, false, false);
+        test(40, 80, Range { start: 0, end: 80 }, 0, 0, false, false);
+        test(120, 80, Range { start: 0, end: 80 }, 0, 0, false, false);
+        test(40, 80, Range { start: 10, end: 80 }, 0, 0, false, false);
+        test(120, 80, Range { start: 10, end: 80 }, 10, 0, false, false);
+        test(120, 80, Range { start: 0, end: 70 }, 0, 10, false, false);
     }
 }
