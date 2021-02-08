@@ -6,7 +6,7 @@ use std::{
 
 use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
-use quicli::prelude::*;
+use log::{debug, error, info, warn};
 use regex::Regex;
 
 use crate::utils::display::Display;

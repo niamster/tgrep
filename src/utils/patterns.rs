@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use quicli::prelude::*;
+use failure::Error;
+use log::{debug, error, trace};
 
 use crate::utils::lines::ToLines;
 
