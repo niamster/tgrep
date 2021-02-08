@@ -862,6 +862,7 @@ dependencies = [
  "ansi_term 0.12.1",
  "crossbeam",
  "env_logger 0.8.2",
+ "failure",
  "futures",
  "glob",
  "log",

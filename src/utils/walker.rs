@@ -10,6 +10,7 @@ use quicli::prelude::*;
 use regex::Regex;
 
 use crate::utils::display::Display;
+use crate::utils::filters::Filters;
 use crate::utils::lines::ToLines;
 use crate::utils::patterns::{Patterns, ToPatterns};
 
@@ -18,6 +19,7 @@ pub struct Walker {
     tpool: ThreadPool,
     ignore_patterns: Patterns,
     ignore_files: Vec<String>,
+    file_filters: Filters,
     regexp: Regex,
     display: Arc<dyn Display>,
 }
@@ -27,6 +29,7 @@ impl Walker {
         tpool: ThreadPool,
         ignore_patterns: Patterns,
         ignore_files: Vec<String>,
+        file_filters: Filters,
         regexp: Regex,
         display: Arc<dyn Display>,
     ) -> Self {
@@ -34,6 +37,7 @@ impl Walker {
             tpool,
             ignore_patterns,
             ignore_files,
+            file_filters,
             regexp,
             display,
         }
@@ -102,6 +106,7 @@ impl Walker {
                 self.tpool.clone(),
                 ignore_patterns.clone(),
                 self.ignore_files.clone(),
+                self.file_filters.clone(),
                 self.regexp.clone(),
                 self.display.clone(),
             );
@@ -115,6 +120,9 @@ impl Walker {
                         let file_type = meta.file_type();
                         if file_type.is_file() {
                             let path = entry.path();
+                            if !self.file_filters.matches(path.to_str().unwrap()) {
+                                continue;
+                            }
                             let regexp = self.regexp.clone();
                             let display = self.display.clone();
                             let wg = wg.clone();

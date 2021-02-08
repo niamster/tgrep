@@ -8,6 +8,7 @@ use structopt::StructOpt;
 mod utils;
 
 use crate::utils::display::DisplayTerminal;
+use crate::utils::filters::Filters;
 use crate::utils::patterns::Patterns;
 use crate::utils::walker::Walker;
 
@@ -27,6 +28,13 @@ struct Cli {
         help = "Default ignore file name"
     )]
     ignore_files: Vec<String>,
+    #[structopt(
+        short = "f",
+        default_value = "*",
+        help = "File filter pattern",
+        name = "filter-pattern"
+    )]
+    filter_pattern: String,
     regexp: String,
     #[structopt(parse(from_os_str))]
     paths: Vec<PathBuf>,
@@ -55,6 +63,7 @@ fn main() -> CliResult {
     };
     let display = DisplayTerminal::new(width);
     let tpool = ThreadPool::new()?;
+    let file_filters = Filters::new(&[args.filter_pattern])?;
     for path in paths {
         let path = path.as_path().canonicalize().unwrap();
         let ignore_patterns =
@@ -63,6 +72,7 @@ fn main() -> CliResult {
             tpool.clone(),
             ignore_patterns,
             args.ignore_files.clone(),
+            file_filters.clone(),
             regexp.clone(),
             Arc::new(display.clone()),
         );
