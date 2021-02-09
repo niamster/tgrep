@@ -32,9 +32,10 @@ struct Cli {
         short = "f",
         default_value = "*",
         help = "File filter pattern",
+        number_of_values = 1,
         name = "filter-pattern"
     )]
-    filter_pattern: String,
+    filter_pattern: Vec<String>,
     regexp: String,
     #[structopt(parse(from_os_str))]
     paths: Vec<PathBuf>,
@@ -63,7 +64,7 @@ fn main() -> CliResult {
     };
     let display = DisplayTerminal::new(width);
     let tpool = ThreadPool::new()?;
-    let file_filters = Filters::new(&[args.filter_pattern])?;
+    let file_filters = Filters::new(&args.filter_pattern)?;
     for path in paths {
         let path = path.as_path().canonicalize().unwrap();
         let ignore_patterns =
