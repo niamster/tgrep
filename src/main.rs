@@ -13,30 +13,10 @@ use structopt::StructOpt;
 
 mod utils;
 
-use crate::utils::display::{DisplayTerminal, PathFormat};
+use crate::utils::display::DisplayTerminal;
 use crate::utils::filters::Filters;
 use crate::utils::patterns::Patterns;
 use crate::utils::walker::Walker;
-
-struct PathFormatter {
-    prefix: String,
-    root: PathBuf,
-}
-
-impl PathFormatter {
-    fn new(prefix: String, root: PathBuf) -> Self {
-        PathFormatter { prefix, root }
-    }
-}
-
-impl PathFormat for PathFormatter {
-    fn path_format(&self, path: &PathBuf) -> String {
-        // "??".to_string()
-        let path = path.as_path();
-        let path = path.strip_prefix(&self.root).unwrap();
-        self.prefix.clone() + path.to_str().unwrap()
-    }
-}
 
 #[derive(Debug, StructOpt)]
 struct Cli {
@@ -95,12 +75,20 @@ fn main() -> Result<(), Error> {
     let tpool = ThreadPool::new()?;
     let file_filters = Filters::new(&args.filter_pattern)?;
     for path in paths {
+        let path = path.as_path();
         // See some fun at https://github.com/rust-lang/rfcs/issues/2208
-        let prefix =
-            path_clean::clean(path.as_path().to_str().unwrap()) + &path::MAIN_SEPARATOR.to_string();
-        let fpath = path.as_path().canonicalize().unwrap();
-        let display =
-            DisplayTerminal::new(width, PathFormatter::new(prefix.to_owned(), fpath.clone()));
+        let prefix = path_clean::clean(path.to_str().unwrap()) + &path::MAIN_SEPARATOR.to_string();
+        let fpath = path.canonicalize().unwrap();
+        let path_format = {
+            let fpath = fpath.clone();
+            move |entry: &PathBuf| -> String {
+                let entry = entry.as_path();
+                let entry = entry.strip_prefix(&fpath).unwrap();
+                prefix.clone() + entry.to_str().unwrap()
+            }
+        };
+        let path_format = path_format.clone();
+        let display = DisplayTerminal::new(width, Arc::new(Box::new(path_format)));
         let ignore_patterns =
             Patterns::new(&fpath.as_path().to_str().unwrap(), &args.ignore_patterns);
         let walker = Walker::new(
