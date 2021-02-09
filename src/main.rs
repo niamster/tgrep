@@ -1,4 +1,7 @@
-use std::{env, path::PathBuf, sync::Arc};
+use std::{
+    path::{self, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Error;
 use clap_verbosity_flag::Verbosity;
@@ -10,10 +13,30 @@ use structopt::StructOpt;
 
 mod utils;
 
-use crate::utils::display::DisplayTerminal;
+use crate::utils::display::{DisplayTerminal, PathFormat};
 use crate::utils::filters::Filters;
 use crate::utils::patterns::Patterns;
 use crate::utils::walker::Walker;
+
+struct PathFormatter {
+    prefix: String,
+    root: PathBuf,
+}
+
+impl PathFormatter {
+    fn new(prefix: String, root: PathBuf) -> Self {
+        PathFormatter { prefix, root }
+    }
+}
+
+impl PathFormat for PathFormatter {
+    fn path_format(&self, path: &PathBuf) -> String {
+        // "??".to_string()
+        let path = path.as_path();
+        let path = path.strip_prefix(&self.root).unwrap();
+        self.prefix.clone() + path.to_str().unwrap()
+    }
+}
 
 #[derive(Debug, StructOpt)]
 struct Cli {
@@ -55,7 +78,7 @@ fn main() -> Result<(), Error> {
         .init();
 
     let paths = if args.paths.is_empty() {
-        vec![env::current_dir()?]
+        vec![PathBuf::from(".")]
     } else {
         args.paths
     };
@@ -69,22 +92,26 @@ fn main() -> Result<(), Error> {
     } else {
         usize::MAX
     };
-    let display = DisplayTerminal::new(width);
     let tpool = ThreadPool::new()?;
     let file_filters = Filters::new(&args.filter_pattern)?;
     for path in paths {
-        let path = path.as_path().canonicalize().unwrap();
+        // See some fun at https://github.com/rust-lang/rfcs/issues/2208
+        let prefix =
+            path_clean::clean(path.as_path().to_str().unwrap()) + &path::MAIN_SEPARATOR.to_string();
+        let fpath = path.as_path().canonicalize().unwrap();
+        let display =
+            DisplayTerminal::new(width, PathFormatter::new(prefix.to_owned(), fpath.clone()));
         let ignore_patterns =
-            Patterns::new(&path.as_path().to_str().unwrap(), &args.ignore_patterns);
+            Patterns::new(&fpath.as_path().to_str().unwrap(), &args.ignore_patterns);
         let walker = Walker::new(
             tpool.clone(),
             ignore_patterns,
             args.ignore_files.clone(),
             file_filters.clone(),
             regexp.clone(),
-            Arc::new(display.clone()),
+            Arc::new(display),
         );
-        walker.walk(&path);
+        walker.walk(&fpath);
     }
 
     Ok(())

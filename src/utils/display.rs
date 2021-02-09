@@ -12,19 +12,31 @@ pub trait Display: Send + Sync {
     fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match);
 }
 
+pub trait PathFormat: Send + Sync {
+    fn path_format(&self, path: &PathBuf) -> String;
+}
+
 #[derive(Clone)]
-pub struct DisplayTerminal {
+pub struct DisplayTerminal<T>
+where
+    T: PathFormat,
+{
     lock: Arc<Mutex<()>>,
     width: usize,
     colour: bool,
+    path_format: T,
 }
 
-impl DisplayTerminal {
-    pub fn new(width: usize) -> Self {
+impl<T> DisplayTerminal<T>
+where
+    T: PathFormat,
+{
+    pub fn new(width: usize, path_format: T) -> Self {
         DisplayTerminal {
             lock: Arc::new(Mutex::new(())),
             width,
             colour: true,
+            path_format,
         }
     }
 
@@ -103,11 +115,14 @@ impl DisplayTerminal {
     }
 }
 
-impl Display for DisplayTerminal {
+impl<T> Display for DisplayTerminal<T>
+where
+    T: PathFormat,
+{
     fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match) {
-        let formated = DisplayTerminal::format(
+        let formated = DisplayTerminal::<T>::format(
             self.width,
-            path.to_str().unwrap(),
+            &self.path_format.path_format(path),
             lno,
             line,
             Range {
