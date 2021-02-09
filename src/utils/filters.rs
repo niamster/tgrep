@@ -1,4 +1,4 @@
-use failure::Error;
+use anyhow::Error;
 
 #[derive(Clone)]
 pub struct Filters {

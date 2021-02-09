@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use failure::Error;
+use anyhow::Error;
 use log::{debug, error, trace};
 
 use crate::utils::lines::ToLines;

@@ -1,7 +1,10 @@
 use std::{env, path::PathBuf, sync::Arc};
 
+use anyhow::Error;
+use clap_verbosity_flag::Verbosity;
+use env_logger::Builder;
 use futures::executor::ThreadPool;
-use quicli::prelude::*;
+use log::info;
 use regex::RegexBuilder;
 use structopt::StructOpt;
 
@@ -43,9 +46,13 @@ struct Cli {
     verbosity: Verbosity,
 }
 
-fn main() -> CliResult {
+fn main() -> Result<(), Error> {
     let args = Cli::from_args();
-    args.verbosity.setup_env_logger("tgrep")?;
+
+    Builder::new()
+        .filter_level(args.verbosity.log_level().unwrap().to_level_filter())
+        .parse_default_env()
+        .init();
 
     let paths = if args.paths.is_empty() {
         vec![env::current_dir()?]
