@@ -1,10 +1,15 @@
 [package]
 name = "tgrep"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Dmytro Milinevskyi <dmilinevskyi@gmail.com>"]
 description = "Toy grep that honors .gitignore"
 license = "Unlicense"
 edition = "2018"
+repository = "https://github.com/niamster/tgrep"
+homepage = "https://github.com/niamster/tgrep"
+readme = "README.md"
+keywords = ["regex", "grep", "egrep", "search", "pattern", "gitignore"]
+categories = ["command-line-utilities", "text-processing"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
