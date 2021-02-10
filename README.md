@@ -4,7 +4,7 @@
 
 ## Installation
 
-`cargo install tgrep`
+Install [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html) and run `cargo install tgrep`.
 
 ## Usage
 
