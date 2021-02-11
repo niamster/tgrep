@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::{self, DirEntry},
     path::PathBuf,
     sync::Arc,
@@ -87,8 +88,8 @@ impl Walker {
         }
     }
 
-    pub fn walk(&self, path: &PathBuf) {
-        let meta = fs::metadata(path.as_path());
+    fn walk_with_parents(&self, path: &PathBuf, parents: &[PathBuf]) {
+        let meta = fs::symlink_metadata(path.as_path());
         if let Err(e) = meta {
             error!("Failed to get path '{}' metadata: {}", path.display(), e);
             return;
@@ -131,7 +132,11 @@ impl Walker {
                                 drop(wg);
                             });
                         } else {
-                            walker.walk(&entry.path());
+                            walker.walk_with_parents(&entry.path(), &{
+                                let mut parents = parents.to_owned();
+                                parents.push(path.clone());
+                                parents
+                            });
                         }
                     }
                     Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
@@ -141,12 +146,60 @@ impl Walker {
         } else if file_type.is_file() {
             Walker::grep(path, self.regexp.clone(), self.display.clone());
         } else if file_type.is_symlink() {
-            error!(
-                "Symlinks are not (yet) supported, skipping '{}'",
-                path.display()
-            );
+            let orig = path;
+            match fs::read_link(path.as_path()) {
+                Ok(lpath) => {
+                    let canonicalize = || {
+                        let cwd = env::current_dir()?;
+                        let parent = path
+                            .parent()
+                            .ok_or_else(|| anyhow::Error::msg("No parent"))?;
+                        env::set_current_dir(&parent)?;
+                        let path = lpath.canonicalize().map_err(|e| {
+                            anyhow::Error::new(e).context(format!("cwd {}", parent.display()))
+                        });
+                        env::set_current_dir(&cwd)?;
+                        path
+                    };
+                    let path = canonicalize();
+                    if let Err(e) = path {
+                        error!("Failed to canonicalize '{}': {}", lpath.display(), e);
+                        return;
+                    }
+                    let path = path.unwrap();
+                    if let Some(level) = parents.iter().position(|parent| *parent == path) {
+                        error!(
+                            "Symlink '{}' -> '{}' (dereferenced to '{}') loop detected at level {}",
+                            orig.display(),
+                            lpath.display(),
+                            path.display(),
+                            level,
+                        );
+                        return;
+                    }
+                    if parents.iter().any(|parent| path.starts_with(parent)) {
+                        info!(
+                            "Skipping symlink '{}' -> '{}' (dereferenced to '{}')",
+                            orig.display(),
+                            lpath.display(),
+                            path.display(),
+                        );
+                        return;
+                    }
+                    self.walk_with_parents(&path, &{
+                        let mut parents = parents.to_owned();
+                        parents.push(path.clone());
+                        parents
+                    });
+                }
+                Err(e) => error!("Failed to read link '{}': {}", path.display(), e),
+            }
         } else {
             warn!("Unhandled path '{}': {:?}", path.display(), file_type)
         }
+    }
+
+    pub fn walk(&self, path: &PathBuf) {
+        self.walk_with_parents(path, &[]);
     }
 }
