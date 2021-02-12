@@ -15,6 +15,7 @@ mod utils;
 
 use crate::utils::display::DisplayTerminal;
 use crate::utils::filters::Filters;
+use crate::utils::matcher::Match;
 use crate::utils::patterns::Patterns;
 use crate::utils::walker::Walker;
 
@@ -24,6 +25,8 @@ struct Cli {
     ignore_case: bool,
     #[structopt(long = "ignore-symlinks", help = "Do not follow symlinks")]
     ignore_symlinks: bool,
+    #[structopt(short = "V", help = "Invert the sense of matching")]
+    invert: bool,
     #[structopt(
         long = "ignore",
         default_value = ".git/",
@@ -89,6 +92,28 @@ fn main() -> Result<(), Error> {
                 prefix.clone() + entry.to_str().unwrap()
             }
         };
+        // Some fun stuff:
+        // 1. https://github.com/rust-lang/rust/issues/22340
+        // 2. https://github.com/rust-lang/rust/issues/26085
+        // 3. https://github.com/rust-lang/rust/issues/29625
+        let matcher = {
+            let regexp = regexp.clone();
+            let invert = args.invert;
+            move |line: &str| -> Option<Match> {
+                if line.is_empty() {
+                    return None;
+                }
+                let option = if invert {
+                    Some(Match::new(0, line.len()))
+                } else {
+                    None
+                };
+                regexp
+                    .find(line)
+                    .map(|v| Match::new(v.start(), v.end()))
+                    .xor(option)
+            }
+        };
         let path_format = path_format.clone();
         let display = DisplayTerminal::new(width, Arc::new(Box::new(path_format)));
         let ignore_patterns =
@@ -98,7 +123,7 @@ fn main() -> Result<(), Error> {
             ignore_patterns,
             args.ignore_files.clone(),
             file_filters.clone(),
-            regexp.clone(),
+            Arc::new(Box::new(matcher)),
             args.ignore_symlinks,
             Arc::new(display),
         );

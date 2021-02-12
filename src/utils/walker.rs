@@ -8,11 +8,11 @@ use std::{
 use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
 use log::{debug, error, info, warn};
-use regex::Regex;
 
 use crate::utils::display::Display;
 use crate::utils::filters::Filters;
 use crate::utils::lines::ToLines;
+use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
 
 #[derive(Clone)]
@@ -21,7 +21,7 @@ pub struct Walker {
     ignore_patterns: Patterns,
     ignore_files: Vec<String>,
     file_filters: Filters,
-    regexp: Regex,
+    matcher: Matcher,
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
 }
@@ -32,7 +32,7 @@ impl Walker {
         ignore_patterns: Patterns,
         ignore_files: Vec<String>,
         file_filters: Filters,
-        regexp: Regex,
+        matcher: Matcher,
         ignore_symlinks: bool,
         display: Arc<dyn Display>,
     ) -> Self {
@@ -41,7 +41,7 @@ impl Walker {
             ignore_patterns,
             ignore_files,
             file_filters,
-            regexp,
+            matcher,
             ignore_symlinks,
             display,
         }
@@ -63,13 +63,13 @@ impl Walker {
         is_excluded
     }
 
-    fn grep(path: &PathBuf, regexp: Regex, display: Arc<dyn Display>) {
+    fn grep(path: &PathBuf, matcher: Matcher, display: Arc<dyn Display>) {
         match path.to_lines() {
             Ok(lines) => {
                 for (lno, line) in lines.enumerate() {
                     match line {
                         Ok(line) => {
-                            if let Some(needle) = regexp.find(&line) {
+                            if let Some(needle) = matcher(&line) {
                                 display.display(&path, lno, &line, &needle)
                             }
                         }
@@ -111,7 +111,7 @@ impl Walker {
                 ignore_patterns.clone(),
                 self.ignore_files.clone(),
                 self.file_filters.clone(),
-                self.regexp.clone(),
+                self.matcher.clone(),
                 self.ignore_symlinks,
                 self.display.clone(),
             );
@@ -128,11 +128,11 @@ impl Walker {
                             if !self.file_filters.matches(path.to_str().unwrap()) {
                                 continue;
                             }
-                            let regexp = self.regexp.clone();
+                            let matcher = self.matcher.clone();
                             let display = self.display.clone();
                             let wg = wg.clone();
                             self.tpool.spawn_ok(async move {
-                                Walker::grep(&path, regexp, display);
+                                Walker::grep(&path, matcher, display);
                                 drop(wg);
                             });
                         } else {
@@ -148,7 +148,7 @@ impl Walker {
             }
             wg.wait();
         } else if file_type.is_file() {
-            Walker::grep(path, self.regexp.clone(), self.display.clone());
+            Walker::grep(path, self.matcher.clone(), self.display.clone());
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {
                 info!("Skipping symlink '{}'", path.display());

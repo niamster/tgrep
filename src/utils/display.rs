@@ -6,10 +6,12 @@ use std::{
 
 use ansi_term::Colour;
 
+use crate::utils::matcher::Match;
+
 type Range = std::ops::Range<usize>;
 
 pub trait Display: Send + Sync {
-    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match);
+    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &Match);
 }
 
 pub type PathFormat = Arc<Box<dyn Fn(&PathBuf) -> String + Send + Sync>>;
@@ -108,7 +110,7 @@ impl DisplayTerminal {
 }
 
 impl Display for DisplayTerminal {
-    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &regex::Match) {
+    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &Match) {
         let formated = DisplayTerminal::format(
             self.width,
             &(self.path_format)(path),
