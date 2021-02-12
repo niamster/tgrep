@@ -114,7 +114,6 @@ fn main() -> Result<(), Error> {
                     .xor(option)
             }
         };
-        let path_format = path_format.clone();
         let display = DisplayTerminal::new(width, Arc::new(Box::new(path_format)));
         let ignore_patterns =
             Patterns::new(&fpath.as_path().to_str().unwrap(), &args.ignore_patterns);
