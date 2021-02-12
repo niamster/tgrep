@@ -22,6 +22,8 @@ use crate::utils::walker::Walker;
 struct Cli {
     #[structopt(short = "i", help = "Case-insensitive search")]
     ignore_case: bool,
+    #[structopt(long = "ignore-symlinks", help = "Do not follow symlinks")]
+    ignore_symlinks: bool,
     #[structopt(
         long = "ignore",
         default_value = ".git/",
@@ -97,6 +99,7 @@ fn main() -> Result<(), Error> {
             args.ignore_files.clone(),
             file_filters.clone(),
             regexp.clone(),
+            args.ignore_symlinks,
             Arc::new(display),
         );
         walker.walk(&fpath);

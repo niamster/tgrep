@@ -22,6 +22,7 @@ pub struct Walker {
     ignore_files: Vec<String>,
     file_filters: Filters,
     regexp: Regex,
+    ignore_symlinks: bool,
     display: Arc<dyn Display>,
 }
 
@@ -32,6 +33,7 @@ impl Walker {
         ignore_files: Vec<String>,
         file_filters: Filters,
         regexp: Regex,
+        ignore_symlinks: bool,
         display: Arc<dyn Display>,
     ) -> Self {
         Walker {
@@ -40,6 +42,7 @@ impl Walker {
             ignore_files,
             file_filters,
             regexp,
+            ignore_symlinks,
             display,
         }
     }
@@ -109,6 +112,7 @@ impl Walker {
                 self.ignore_files.clone(),
                 self.file_filters.clone(),
                 self.regexp.clone(),
+                self.ignore_symlinks,
                 self.display.clone(),
             );
             let wg = WaitGroup::new();
@@ -146,6 +150,10 @@ impl Walker {
         } else if file_type.is_file() {
             Walker::grep(path, self.regexp.clone(), self.display.clone());
         } else if file_type.is_symlink() {
+            if self.ignore_symlinks {
+                info!("Skipping symlink '{}'", path.display());
+                return;
+            }
             let orig = path;
             match fs::read_link(path.as_path()) {
                 Ok(lpath) => {
