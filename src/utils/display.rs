@@ -16,25 +16,72 @@ pub trait Display: Send + Sync {
 
 pub type PathFormat = Arc<Box<dyn Fn(&PathBuf) -> String + Send + Sync>>;
 
+pub trait OutputFormat: Send + Sync {
+    fn format(
+        &self,
+        width: usize,
+        path: &str,
+        lno: usize,
+        line: &str,
+        needle: Range,
+        colour: bool,
+    ) -> String;
+}
+
 #[derive(Clone)]
-pub struct DisplayTerminal {
+pub struct DisplayTerminal<T> {
     lock: Arc<Mutex<()>>,
     width: usize,
     colour: bool,
+    format: T,
     path_format: PathFormat,
 }
 
-impl DisplayTerminal {
-    pub fn new(width: usize, path_format: PathFormat) -> Self {
+impl<T> DisplayTerminal<T>
+where
+    T: OutputFormat,
+{
+    pub fn new(width: usize, format: T, path_format: PathFormat) -> Self {
         DisplayTerminal {
             lock: Arc::new(Mutex::new(())),
             width,
             colour: true,
+            format,
             path_format,
         }
     }
+}
 
-    fn format(
+impl<T> Display for DisplayTerminal<T>
+where
+    T: OutputFormat,
+{
+    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &Match) {
+        let formated = self.format.format(
+            self.width,
+            &(self.path_format)(path),
+            lno,
+            line,
+            Range {
+                start: needle.start(),
+                end: needle.end(),
+            },
+            self.colour,
+        );
+        let guard = self.lock.lock();
+        println!("{}", formated);
+        drop(guard);
+    }
+}
+
+pub enum Format {
+    Rich,
+    PathOnly,
+}
+
+impl Format {
+    fn rich_format(
+        &self,
         width: usize,
         path: &str,
         lno: usize,
@@ -109,22 +156,20 @@ impl DisplayTerminal {
     }
 }
 
-impl Display for DisplayTerminal {
-    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &Match) {
-        let formated = DisplayTerminal::format(
-            self.width,
-            &(self.path_format)(path),
-            lno,
-            line,
-            Range {
-                start: needle.start(),
-                end: needle.end(),
-            },
-            self.colour,
-        );
-        let guard = self.lock.lock();
-        println!("{}", formated);
-        drop(guard);
+impl OutputFormat for Format {
+    fn format(
+        &self,
+        width: usize,
+        path: &str,
+        lno: usize,
+        line: &str,
+        needle: Range,
+        colour: bool,
+    ) -> String {
+        match self {
+            Format::Rich => self.rich_format(width, path, lno, line, needle, colour),
+            Format::PathOnly => path.to_string(),
+        }
     }
 }
 

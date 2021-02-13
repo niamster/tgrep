@@ -22,17 +22,20 @@ pub struct Walker {
     ignore_files: Vec<String>,
     file_filters: Filters,
     matcher: Matcher,
+    max: usize,
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
 }
 
 impl Walker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tpool: ThreadPool,
         ignore_patterns: Patterns,
         ignore_files: Vec<String>,
         file_filters: Filters,
         matcher: Matcher,
+        max: usize,
         ignore_symlinks: bool,
         display: Arc<dyn Display>,
     ) -> Self {
@@ -42,6 +45,7 @@ impl Walker {
             ignore_files,
             file_filters,
             matcher,
+            max,
             ignore_symlinks,
             display,
         }
@@ -63,14 +67,19 @@ impl Walker {
         is_excluded
     }
 
-    fn grep(path: &PathBuf, matcher: Matcher, display: Arc<dyn Display>) {
+    fn grep(path: &PathBuf, matcher: Matcher, max: usize, display: Arc<dyn Display>) {
+        let mut matches = 0;
         match path.to_lines() {
             Ok(lines) => {
                 for (lno, line) in lines.enumerate() {
                     match line {
                         Ok(line) => {
                             if let Some(needle) = matcher(&line) {
-                                display.display(&path, lno, &line, &needle)
+                                display.display(&path, lno, &line, &needle);
+                                matches += 1;
+                                if matches >= max {
+                                    return;
+                                }
                             }
                         }
                         Err(e) => match e.kind() {
@@ -112,6 +121,7 @@ impl Walker {
                 self.ignore_files.clone(),
                 self.file_filters.clone(),
                 self.matcher.clone(),
+                self.max,
                 self.ignore_symlinks,
                 self.display.clone(),
             );
@@ -129,10 +139,11 @@ impl Walker {
                                 continue;
                             }
                             let matcher = self.matcher.clone();
+                            let max = self.max;
                             let display = self.display.clone();
                             let wg = wg.clone();
                             self.tpool.spawn_ok(async move {
-                                Walker::grep(&path, matcher, display);
+                                Walker::grep(&path, matcher, max, display);
                                 drop(wg);
                             });
                         } else {
@@ -148,7 +159,7 @@ impl Walker {
             }
             wg.wait();
         } else if file_type.is_file() {
-            Walker::grep(path, self.matcher.clone(), self.display.clone());
+            Walker::grep(path, self.matcher.clone(), self.max, self.display.clone());
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {
                 info!("Skipping symlink '{}'", path.display());

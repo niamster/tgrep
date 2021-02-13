@@ -13,7 +13,7 @@ use structopt::StructOpt;
 
 mod utils;
 
-use crate::utils::display::DisplayTerminal;
+use crate::utils::display::{DisplayTerminal, Format};
 use crate::utils::filters::Filters;
 use crate::utils::matcher::Match;
 use crate::utils::patterns::Patterns;
@@ -27,6 +27,8 @@ struct Cli {
     ignore_symlinks: bool,
     #[structopt(short = "V", help = "Invert the sense of matching")]
     invert: bool,
+    #[structopt(short = "l", help = "Show only files with match")]
+    path_only: bool,
     #[structopt(
         long = "ignore",
         default_value = ".git/",
@@ -114,7 +116,15 @@ fn main() -> Result<(), Error> {
                     .xor(option)
             }
         };
-        let display = DisplayTerminal::new(width, Arc::new(Box::new(path_format)));
+        let display = DisplayTerminal::new(
+            width,
+            if args.path_only {
+                Format::PathOnly
+            } else {
+                Format::Rich
+            },
+            Arc::new(Box::new(path_format)),
+        );
         let ignore_patterns =
             Patterns::new(&fpath.as_path().to_str().unwrap(), &args.ignore_patterns);
         let walker = Walker::new(
@@ -123,6 +133,7 @@ fn main() -> Result<(), Error> {
             args.ignore_files.clone(),
             file_filters.clone(),
             Arc::new(Box::new(matcher)),
+            if args.path_only { 1 } else { usize::MAX },
             args.ignore_symlinks,
             Arc::new(display),
         );
