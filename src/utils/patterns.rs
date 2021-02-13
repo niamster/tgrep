@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Error;
 use log::{debug, error, trace};
 
-use crate::utils::lines::ToLines;
+use crate::utils::lines::LinesReader;
 
 // From https://git-scm.com/docs/gitignore
 //
@@ -189,7 +189,7 @@ pub trait ToPatterns {
 
 impl ToPatterns for PathBuf {
     fn to_patterns(&self) -> Patterns {
-        match self.to_lines() {
+        match self.lines() {
             Ok(contents) => {
                 let mut lines = Vec::new();
                 for line in contents {

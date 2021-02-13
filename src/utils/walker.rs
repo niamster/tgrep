@@ -11,7 +11,7 @@ use log::{debug, error, info, warn};
 
 use crate::utils::display::Display;
 use crate::utils::filters::Filters;
-use crate::utils::lines::ToLines;
+use crate::utils::lines::LinesReader;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
 
@@ -67,15 +67,15 @@ impl Walker {
         is_excluded
     }
 
-    fn grep(path: &PathBuf, matcher: Matcher, max: usize, display: Arc<dyn Display>) {
+    fn grep<T: LinesReader>(reader: &T, matcher: Matcher, max: usize, display: Arc<dyn Display>) {
         let mut matches = 0;
-        match path.to_lines() {
+        match reader.lines() {
             Ok(lines) => {
                 for (lno, line) in lines.enumerate() {
                     match line {
                         Ok(line) => {
                             if let Some(needle) = matcher(&line) {
-                                display.display(&path, lno, &line, &needle);
+                                display.display(reader.path(), lno, &line, &needle);
                                 matches += 1;
                                 if matches >= max {
                                     return;
@@ -85,18 +85,18 @@ impl Walker {
                         Err(e) => match e.kind() {
                             std::io::ErrorKind::InvalidData => {
                                 // Likely binary file
-                                debug!("Failed to read '{}': {}", path.display(), e);
+                                debug!("Failed to read '{}': {}", reader.path().display(), e);
                                 return;
                             }
                             _ => {
-                                warn!("Failed to read '{}': {}", path.display(), e);
+                                warn!("Failed to read '{}': {}", reader.path().display(), e);
                                 return;
                             }
                         },
                     }
                 }
             }
-            Err(e) => error!("Failed to read '{}': {}", path.display(), e),
+            Err(e) => error!("Failed to read '{}': {}", reader.path().display(), e),
         }
     }
 

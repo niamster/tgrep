@@ -1,16 +1,22 @@
 use std::{
     fs::File,
-    io::{self, BufRead, BufReader},
+    io::{self, BufRead},
+    iter::Iterator,
     path::PathBuf,
 };
 
-pub trait ToLines {
-    fn to_lines(&self) -> io::Result<io::Lines<BufReader<File>>>;
+pub trait LinesReader {
+    fn lines(&self) -> io::Result<Box<dyn Iterator<Item = io::Result<String>>>>;
+    fn path(&self) -> &PathBuf;
 }
 
-impl ToLines for PathBuf {
-    fn to_lines(&self) -> io::Result<io::Lines<BufReader<File>>> {
+impl LinesReader for PathBuf {
+    fn lines(&self) -> io::Result<Box<dyn Iterator<Item = io::Result<String>>>> {
         let file = File::open(self.as_path())?;
-        Ok(io::BufReader::new(file).lines())
+        Ok(Box::new(io::BufReader::new(file).lines()))
+    }
+
+    fn path(&self) -> &PathBuf {
+        self
     }
 }
