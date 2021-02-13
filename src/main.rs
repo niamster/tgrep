@@ -29,6 +29,8 @@ struct Cli {
     invert: bool,
     #[structopt(short = "l", help = "Show only files with match")]
     path_only: bool,
+    #[structopt(long = "no-colour", help = "Disable colours")]
+    no_color: bool,
     #[structopt(
         long = "ignore",
         default_value = ".git/",
@@ -121,7 +123,9 @@ fn main() -> Result<(), Error> {
             if args.path_only {
                 Format::PathOnly
             } else {
-                Format::Rich
+                Format::Rich {
+                    colour: !args.no_color,
+                }
             },
             Arc::new(Box::new(path_format)),
         );

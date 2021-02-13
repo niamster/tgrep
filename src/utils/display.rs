@@ -17,22 +17,13 @@ pub trait Display: Send + Sync {
 pub type PathFormat = Arc<Box<dyn Fn(&PathBuf) -> String + Send + Sync>>;
 
 pub trait OutputFormat: Send + Sync {
-    fn format(
-        &self,
-        width: usize,
-        path: &str,
-        lno: usize,
-        line: &str,
-        needle: Range,
-        colour: bool,
-    ) -> String;
+    fn format(&self, width: usize, path: &str, lno: usize, line: &str, needle: Range) -> String;
 }
 
 #[derive(Clone)]
 pub struct DisplayTerminal<T> {
     lock: Arc<Mutex<()>>,
     width: usize,
-    colour: bool,
     format: T,
     path_format: PathFormat,
 }
@@ -45,7 +36,6 @@ where
         DisplayTerminal {
             lock: Arc::new(Mutex::new(())),
             width,
-            colour: true,
             format,
             path_format,
         }
@@ -66,7 +56,6 @@ where
                 start: needle.start(),
                 end: needle.end(),
             },
-            self.colour,
         );
         let guard = self.lock.lock();
         println!("{}", formated);
@@ -75,7 +64,7 @@ where
 }
 
 pub enum Format {
-    Rich,
+    Rich { colour: bool },
     PathOnly,
 }
 
@@ -157,17 +146,9 @@ impl Format {
 }
 
 impl OutputFormat for Format {
-    fn format(
-        &self,
-        width: usize,
-        path: &str,
-        lno: usize,
-        line: &str,
-        needle: Range,
-        colour: bool,
-    ) -> String {
+    fn format(&self, width: usize, path: &str, lno: usize, line: &str, needle: Range) -> String {
         match self {
-            Format::Rich => self.rich_format(width, path, lno, line, needle, colour),
+            Format::Rich { colour } => self.rich_format(width, path, lno, line, needle, *colour),
             Format::PathOnly => path.to_string(),
         }
     }
@@ -193,7 +174,7 @@ mod tests {
             );
             assert_eq!(
                 formated,
-                DisplayTerminal::format(width, "/", 0, &"-".repeat(len), needle, false),
+                Format::Rich { colour: false }.format(width, "/", 0, &"-".repeat(len), needle),
             );
             assert_eq!(
                 if len < width - 2 - 4 {
