@@ -17,3 +17,7 @@ Install [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.htm
 
 ### Verbose output
 ![Verbose mode](https://raw.githubusercontent.com/niamster/tgrep/main/img/tgrep-example-verbose.png)
+
+
+## NOTE
+The architecture of the app might look sick - don't worry, it's just a playground for various Rust paradigms.
