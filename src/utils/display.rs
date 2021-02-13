@@ -82,11 +82,6 @@ impl Format {
         assert!(needle.end <= line.len());
         let lno = lno.to_string();
         let needle_len = needle.end - needle.start;
-        let width = if colour {
-            width
-        } else {
-            width - 2 // -2 for `[]` in format
-        };
         let preambule_len = path.len() + lno.len() + 2; // +2 for `: ` in format
         let width = cmp::max(width, preambule_len + needle_len);
         let width = width - preambule_len;
@@ -138,7 +133,7 @@ impl Format {
             )
         } else {
             format!(
-                "{}:{} {}{}[{}]{}{}",
+                "{}:{} {}{}{}{}{}",
                 path, lno, prefix, before, what, after, suffix,
             )
         }
@@ -164,8 +159,10 @@ mod tests {
             let prefix = if prefix { "[...] " } else { "" };
             let suffix = if suffix { " [...]" } else { "" };
             let needle_len = needle.end - needle.start;
+            let preambule = "/:0 ";
             let formated = format!(
-                "/:0 {}{}[{}]{}{}",
+                "{}{}{}{}{}{}",
+                preambule,
                 prefix,
                 "-".repeat(start),
                 "-".repeat(needle_len),
@@ -177,19 +174,19 @@ mod tests {
                 Format::Rich { colour: false }.format(width, "/", 0, &"-".repeat(len), needle),
             );
             assert_eq!(
-                if len < width - 2 - 4 {
-                    len + 2 + 4
+                if len < width - preambule.len() {
+                    len + preambule.len()
                 } else if needle_len > width {
-                    needle_len + 2 + 4
+                    needle_len + preambule.len()
                 } else {
                     width
                 },
                 formated.len()
             );
         };
-        test(40, 80, Range { start: 4, end: 5 }, 4, 23, false, true);
-        test(40, 80, Range { start: 64, end: 65 }, 12, 15, true, false);
-        test(40, 80, Range { start: 34, end: 45 }, 6, 5, true, true);
+        test(40, 80, Range { start: 4, end: 5 }, 4, 25, false, true);
+        test(40, 80, Range { start: 64, end: 65 }, 14, 15, true, false);
+        test(40, 80, Range { start: 34, end: 45 }, 7, 6, true, true);
         test(40, 80, Range { start: 4, end: 45 }, 0, 0, false, false);
         test(40, 80, Range { start: 4, end: 75 }, 0, 0, false, false);
         test(120, 80, Range { start: 4, end: 75 }, 4, 5, false, false);
