@@ -4,8 +4,6 @@ use std::{
 };
 
 use anyhow::Error;
-use clap_verbosity_flag::Verbosity;
-use env_logger::Builder;
 use futures::executor::ThreadPool;
 use log::info;
 use regex::RegexBuilder;
@@ -25,7 +23,7 @@ struct Cli {
     ignore_case: bool,
     #[structopt(long = "ignore-symlinks", help = "Do not follow symlinks")]
     ignore_symlinks: bool,
-    #[structopt(short = "V", help = "Invert the sense of matching")]
+    #[structopt(short = "v", help = "Invert the sense of matching")]
     invert: bool,
     #[structopt(short = "l", help = "Show only files with match")]
     path_only: bool,
@@ -54,15 +52,30 @@ struct Cli {
     regexp: String,
     #[structopt(parse(from_os_str))]
     paths: Vec<PathBuf>,
-    #[structopt(flatten)]
-    verbosity: Verbosity,
+    /// Pass many times for more log output
+    ///
+    /// By default, it'll only report errors. Passing `-V` one time also prints
+    /// warnings, `-VV` enables info logging, `-VVV` debug, and `-VVVV` trace.
+    #[structopt(long, short = "V", parse(from_occurrences))]
+    verbosity: i8,
+}
+
+fn log_level(verbosity: i8) -> log::LevelFilter {
+    match verbosity {
+        std::i8::MIN..=-1 => log::LevelFilter::Off,
+        0 => log::LevelFilter::Error,
+        1 => log::LevelFilter::Warn,
+        2 => log::LevelFilter::Info,
+        3 => log::LevelFilter::Debug,
+        4..=std::i8::MAX => log::LevelFilter::Trace,
+    }
 }
 
 fn main() -> Result<(), Error> {
     let args = Cli::from_args();
 
-    Builder::new()
-        .filter_level(args.verbosity.log_level().unwrap().to_level_filter())
+    env_logger::Builder::new()
+        .filter_level(log_level(args.verbosity))
         .parse_default_env()
         .init();
 
