@@ -70,7 +70,7 @@ where
 
 pub enum Format {
     Rich { colour: bool },
-    PathOnly,
+    PathOnly { colour: bool },
 }
 
 impl Format {
@@ -162,7 +162,7 @@ impl OutputFormat for Format {
                 }
                 None => self.format_path(path, *colour),
             },
-            Format::PathOnly => path.to_string(),
+            Format::PathOnly { colour } => self.format_path(path, *colour),
         }
     }
 }

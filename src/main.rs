@@ -131,7 +131,7 @@ fn main() -> Result<(), Error> {
             DisplayTerminal::new(
                 width,
                 if path_only {
-                    Format::PathOnly
+                    Format::PathOnly { colour: !no_color }
                 } else {
                     Format::Rich { colour: !no_color }
                 },
