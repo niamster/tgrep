@@ -78,7 +78,7 @@ impl Format {
         needle: Range,
         colour: bool,
     ) -> String {
-        assert!(needle.end > needle.start);
+        assert!(needle.end >= needle.start);
         assert!(needle.end <= line.len());
         let lno = lno.to_string();
         let needle_len = needle.end - needle.start;

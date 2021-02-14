@@ -110,14 +110,14 @@ fn main() -> Result<(), Error> {
         let invert = args.invert;
         let regexp = regexp;
         move |line: &str| -> Option<Match> {
-            if line.is_empty() {
-                return None;
-            }
             let option = if invert {
                 Some(Match::new(0, line.len()))
             } else {
                 None
             };
+            if line.is_empty() {
+                return option.xor(None);
+            }
             regexp
                 .find(line)
                 .map(|v| Match::new(v.start(), v.end()))
