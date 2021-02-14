@@ -67,7 +67,12 @@ impl Walker {
         is_excluded
     }
 
-    fn grep<T: LinesReader>(reader: &T, matcher: Matcher, max: usize, display: Arc<dyn Display>) {
+    pub fn grep<T: LinesReader>(
+        reader: &T,
+        matcher: Matcher,
+        max: usize,
+        display: Arc<dyn Display>,
+    ) {
         let mut matches = 0;
         match reader.lines() {
             Ok(lines) => {

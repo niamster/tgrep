@@ -11,10 +11,11 @@ use structopt::StructOpt;
 
 mod utils;
 
-use crate::utils::display::{DisplayTerminal, Format};
+use crate::utils::display::{DisplayTerminal, Format, PathFormat};
 use crate::utils::filters::Filters;
 use crate::utils::matcher::Match;
 use crate::utils::patterns::Patterns;
+use crate::utils::stdin::Stdin;
 use crate::utils::walker::Walker;
 
 #[derive(Debug, StructOpt)]
@@ -79,8 +80,13 @@ fn main() -> Result<(), Error> {
         .parse_default_env()
         .init();
 
+    let stdin = Stdin::new();
     let paths = if args.paths.is_empty() {
-        vec![PathBuf::from(".")]
+        if stdin.is_readable() {
+            vec![]
+        } else {
+            vec![PathBuf::from(".")]
+        }
     } else {
         args.paths
     };
@@ -96,6 +102,43 @@ fn main() -> Result<(), Error> {
     };
     let tpool = ThreadPool::new()?;
     let file_filters = Filters::new(&args.filter_pattern)?;
+    let matcher = {
+        // Some fun stuff:
+        // 1. https://github.com/rust-lang/rust/issues/22340
+        // 2. https://github.com/rust-lang/rust/issues/26085
+        // 3. https://github.com/rust-lang/rust/issues/29625
+        let invert = args.invert;
+        let regexp = regexp;
+        move |line: &str| -> Option<Match> {
+            if line.is_empty() {
+                return None;
+            }
+            let option = if invert {
+                Some(Match::new(0, line.len()))
+            } else {
+                None
+            };
+            regexp
+                .find(line)
+                .map(|v| Match::new(v.start(), v.end()))
+                .xor(option)
+        }
+    };
+    let display = {
+        let path_only = args.path_only;
+        let no_color = args.no_color;
+        move |path_format: PathFormat| {
+            DisplayTerminal::new(
+                width,
+                if path_only {
+                    Format::PathOnly
+                } else {
+                    Format::Rich { colour: !no_color }
+                },
+                path_format,
+            )
+        }
+    };
     for path in paths {
         let path = path.as_path();
         // See some fun at https://github.com/rust-lang/rfcs/issues/2208
@@ -109,39 +152,7 @@ fn main() -> Result<(), Error> {
                 prefix.clone() + entry.to_str().unwrap()
             }
         };
-        // Some fun stuff:
-        // 1. https://github.com/rust-lang/rust/issues/22340
-        // 2. https://github.com/rust-lang/rust/issues/26085
-        // 3. https://github.com/rust-lang/rust/issues/29625
-        let matcher = {
-            let regexp = regexp.clone();
-            let invert = args.invert;
-            move |line: &str| -> Option<Match> {
-                if line.is_empty() {
-                    return None;
-                }
-                let option = if invert {
-                    Some(Match::new(0, line.len()))
-                } else {
-                    None
-                };
-                regexp
-                    .find(line)
-                    .map(|v| Match::new(v.start(), v.end()))
-                    .xor(option)
-            }
-        };
-        let display = DisplayTerminal::new(
-            width,
-            if args.path_only {
-                Format::PathOnly
-            } else {
-                Format::Rich {
-                    colour: !args.no_color,
-                }
-            },
-            Arc::new(Box::new(path_format)),
-        );
+        let display = display(Arc::new(Box::new(path_format)));
         let ignore_patterns =
             Patterns::new(&fpath.as_path().to_str().unwrap(), &args.ignore_patterns);
         let walker = Walker::new(
@@ -149,12 +160,22 @@ fn main() -> Result<(), Error> {
             ignore_patterns,
             args.ignore_files.clone(),
             file_filters.clone(),
-            Arc::new(Box::new(matcher)),
+            Arc::new(Box::new(matcher.clone())),
             if args.path_only { 1 } else { usize::MAX },
             args.ignore_symlinks,
             Arc::new(display),
         );
         walker.walk(&fpath);
+    }
+    if stdin.is_readable() {
+        let path_format = |entry: &PathBuf| -> String { entry.to_str().unwrap().to_owned() };
+        let display = display(Arc::new(Box::new(path_format)));
+        Walker::grep(
+            &stdin,
+            Arc::new(Box::new(matcher)),
+            usize::MAX,
+            Arc::new(display),
+        );
     }
 
     Ok(())
