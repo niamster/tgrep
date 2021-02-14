@@ -75,9 +75,9 @@ impl Walker {
     pub fn new(matcher: Matcher, display: Arc<dyn Display>) -> Self {
         Walker {
             tpool: None,
-            ignore_patterns: Patterns::empty(),
+            ignore_patterns: Default::default(),
             ignore_files: vec![],
-            file_filters: Filters::empty(),
+            file_filters: Default::default(),
             matcher,
             max_matches_per_file: usize::MAX,
             ignore_symlinks: false,

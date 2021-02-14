@@ -77,22 +77,15 @@ impl Pattern {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Patterns {
     whitelist: Vec<Pattern>,
     blacklist: Vec<Pattern>,
 }
 
 impl Patterns {
-    pub fn empty() -> Self {
-        Patterns {
-            whitelist: vec![],
-            blacklist: vec![],
-        }
-    }
-
     pub fn new(root: &str, strings: &[String]) -> Self {
-        let mut patterns = Patterns::empty();
+        let mut patterns: Patterns = Default::default();
         for pattern in strings {
             let orig = pattern.clone();
             let pattern = pattern.trim_start();
@@ -204,7 +197,7 @@ impl ToPatterns for PathBuf {
             }
             Err(e) => {
                 error!("Failed to read file with pattern: {}", e);
-                Patterns::empty()
+                Default::default()
             }
         }
     }
@@ -212,7 +205,7 @@ impl ToPatterns for PathBuf {
 
 impl ToPatterns for Vec<PathBuf> {
     fn to_patterns(&self) -> Patterns {
-        let mut patterns = Patterns::empty();
+        let mut patterns: Patterns = Default::default();
         for path in self {
             patterns.extend(&path.to_patterns());
         }
