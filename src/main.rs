@@ -13,10 +13,11 @@ mod utils;
 
 use crate::utils::display::{DisplayTerminal, Format, PathFormat};
 use crate::utils::filters::Filters;
+use crate::utils::grep;
 use crate::utils::matcher::Match;
 use crate::utils::patterns::Patterns;
 use crate::utils::stdin::Stdin;
-use crate::utils::walker::{Walker, WalkerBuilder};
+use crate::utils::walker::WalkerBuilder;
 
 #[derive(Debug, StructOpt)]
 struct Cli {
@@ -155,25 +156,29 @@ fn main() -> Result<(), Error> {
         let display = display(Arc::new(Box::new(path_format)));
         let ignore_patterns =
             Patterns::new(&fpath.as_path().to_str().unwrap(), &args.ignore_patterns);
-        let walker = WalkerBuilder::new(Arc::new(Box::new(matcher.clone())), Arc::new(display))
-            .thread_pool(tpool.clone())
-            .ignore_patterns(ignore_patterns)
-            .ignore_files(args.ignore_files.clone())
-            .file_filters(file_filters.clone())
-            .ignore_symlinks(args.ignore_symlinks)
-            .max_matches_per_file(if args.path_only { 1 } else { usize::MAX })
-            .build();
+        let grep = if args.path_only {
+            if args.invert {
+                grep::grep_matches_all_lines
+            } else {
+                grep::grep_matches_once
+            }
+        } else {
+            grep::grep
+        };
+        let walker =
+            WalkerBuilder::new(grep, Arc::new(Box::new(matcher.clone())), Arc::new(display))
+                .thread_pool(tpool.clone())
+                .ignore_patterns(ignore_patterns)
+                .ignore_files(args.ignore_files.clone())
+                .file_filters(file_filters.clone())
+                .ignore_symlinks(args.ignore_symlinks)
+                .build();
         walker.walk(&fpath);
     }
     if stdin.is_readable() {
         let path_format = |entry: &PathBuf| -> String { entry.to_str().unwrap().to_owned() };
         let display = display(Arc::new(Box::new(path_format)));
-        Walker::grep(
-            &stdin,
-            Arc::new(Box::new(matcher)),
-            usize::MAX,
-            Arc::new(display),
-        );
+        grep::grep(&stdin, Arc::new(Box::new(matcher)), Arc::new(display));
     }
 
     Ok(())

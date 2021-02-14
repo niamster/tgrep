@@ -7,11 +7,11 @@ use std::{
 
 use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 
-use crate::utils::display::{Display, DisplayContext};
+use crate::utils::display::Display;
 use crate::utils::filters::Filters;
-use crate::utils::lines::LinesReader;
+use crate::utils::grep::Grep;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
 
@@ -21,8 +21,8 @@ pub struct Walker {
     ignore_patterns: Patterns,
     ignore_files: Vec<String>,
     file_filters: Filters,
+    grep: Grep<PathBuf>,
     matcher: Matcher,
-    max_matches_per_file: usize,
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
 }
@@ -30,9 +30,9 @@ pub struct Walker {
 pub struct WalkerBuilder(Walker);
 
 impl WalkerBuilder {
-    pub fn new(matcher: Matcher, display: Arc<dyn Display>) -> Self {
+    pub fn new(grep: Grep<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) -> Self {
         WalkerBuilder {
-            0: Walker::new(matcher, display),
+            0: Walker::new(grep, matcher, display),
         }
     }
 
@@ -56,11 +56,6 @@ impl WalkerBuilder {
         self
     }
 
-    pub fn max_matches_per_file(mut self, max_matches_per_file: usize) -> WalkerBuilder {
-        self.0.max_matches_per_file = max_matches_per_file;
-        self
-    }
-
     pub fn ignore_symlinks(mut self, ignore_symlinks: bool) -> WalkerBuilder {
         self.0.ignore_symlinks = ignore_symlinks;
         self
@@ -72,14 +67,14 @@ impl WalkerBuilder {
 }
 
 impl Walker {
-    pub fn new(matcher: Matcher, display: Arc<dyn Display>) -> Self {
+    pub fn new(grep: Grep<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) -> Self {
         Walker {
             tpool: None,
             ignore_patterns: Default::default(),
             ignore_files: vec![],
             file_filters: Default::default(),
+            grep,
             matcher,
-            max_matches_per_file: usize::MAX,
             ignore_symlinks: false,
             display,
         }
@@ -99,47 +94,6 @@ impl Walker {
             info!("Skipping {:?}", entry.path());
         }
         is_excluded
-    }
-
-    pub fn grep<T: LinesReader>(
-        reader: &T,
-        matcher: Matcher,
-        max: usize,
-        display: Arc<dyn Display>,
-    ) {
-        let mut matches = 0;
-        match reader.lines() {
-            Ok(lines) => {
-                for (lno, line) in lines.enumerate() {
-                    match line {
-                        Ok(line) => {
-                            if let Some(needle) = matcher(&line) {
-                                display.display(
-                                    reader.path(),
-                                    Some(DisplayContext::new(lno, &line, needle)),
-                                );
-                                matches += 1;
-                                if matches >= max {
-                                    return;
-                                }
-                            }
-                        }
-                        Err(e) => match e.kind() {
-                            std::io::ErrorKind::InvalidData => {
-                                // Likely binary file
-                                debug!("Failed to read '{}': {}", reader.path().display(), e);
-                                return;
-                            }
-                            _ => {
-                                warn!("Failed to read '{}': {}", reader.path().display(), e);
-                                return;
-                            }
-                        },
-                    }
-                }
-            }
-            Err(e) => error!("Failed to read '{}': {}", reader.path().display(), e),
-        }
     }
 
     fn walk_with_parents(&self, path: &PathBuf, parents: &[PathBuf]) {
@@ -176,17 +130,17 @@ impl Walker {
                                 continue;
                             }
                             let matcher = self.matcher.clone();
-                            let max = self.max_matches_per_file;
                             let display = self.display.clone();
+                            let grep = self.grep;
                             match &self.tpool {
                                 Some(tpool) => {
                                     let wg = wg.clone();
                                     tpool.spawn_ok(async move {
-                                        Walker::grep(&path, matcher, max, display);
+                                        (grep)(&path, matcher, display);
                                         drop(wg);
                                     });
                                 }
-                                None => Walker::grep(&path, matcher, max, display),
+                                None => (walker.grep)(&path, matcher, display),
                             }
                         } else {
                             walker.walk_with_parents(&entry.path(), &{
@@ -201,12 +155,7 @@ impl Walker {
             }
             wg.wait();
         } else if file_type.is_file() {
-            Walker::grep(
-                path,
-                self.matcher.clone(),
-                self.max_matches_per_file,
-                self.display.clone(),
-            );
+            (self.grep)(path, self.matcher.clone(), self.display.clone());
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {
                 info!("Skipping symlink '{}'", path.display());
