@@ -10,14 +10,26 @@ use crate::utils::matcher::Match;
 
 type Range = std::ops::Range<usize>;
 
+pub struct DisplayContext<'a> {
+    lno: usize,
+    line: &'a str,
+    needle: Match,
+}
+
+impl<'a> DisplayContext<'a> {
+    pub fn new(lno: usize, line: &'a str, needle: Match) -> Self {
+        DisplayContext { lno, line, needle }
+    }
+}
+
 pub trait Display: Send + Sync {
-    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &Match);
+    fn display(&self, path: &PathBuf, context: Option<DisplayContext>);
 }
 
 pub type PathFormat = Arc<Box<dyn Fn(&PathBuf) -> String + Send + Sync>>;
 
 pub trait OutputFormat: Send + Sync {
-    fn format(&self, width: usize, path: &str, lno: usize, line: &str, needle: Range) -> String;
+    fn format(&self, width: usize, path: &str, context: Option<DisplayContext>) -> String;
 }
 
 #[derive(Clone)]
@@ -46,17 +58,10 @@ impl<T> Display for DisplayTerminal<T>
 where
     T: OutputFormat,
 {
-    fn display(&self, path: &PathBuf, lno: usize, line: &str, needle: &Match) {
-        let formated = self.format.format(
-            self.width,
-            &(self.path_format)(path),
-            lno,
-            line,
-            Range {
-                start: needle.start(),
-                end: needle.end(),
-            },
-        );
+    fn display(&self, path: &PathBuf, context: Option<DisplayContext>) {
+        let formated = self
+            .format
+            .format(self.width, &(self.path_format)(path), context);
         let guard = self.lock.lock();
         println!("{}", formated);
         drop(guard);
@@ -138,12 +143,25 @@ impl Format {
             )
         }
     }
+
+    fn format_path(&self, path: &str, colour: bool) -> String {
+        if colour {
+            Colour::Blue.paint(path).to_string()
+        } else {
+            path.to_string()
+        }
+    }
 }
 
 impl OutputFormat for Format {
-    fn format(&self, width: usize, path: &str, lno: usize, line: &str, needle: Range) -> String {
+    fn format(&self, width: usize, path: &str, context: Option<DisplayContext>) -> String {
         match self {
-            Format::Rich { colour } => self.rich_format(width, path, lno, line, needle, *colour),
+            Format::Rich { colour } => match context {
+                Some(ctx) => {
+                    self.rich_format(width, path, ctx.lno, ctx.line, ctx.needle.into(), *colour)
+                }
+                None => self.format_path(path, *colour),
+            },
             Format::PathOnly => path.to_string(),
         }
     }
@@ -171,7 +189,11 @@ mod tests {
             );
             assert_eq!(
                 formated,
-                Format::Rich { colour: false }.format(width, "/", 0, &"-".repeat(len), needle),
+                Format::Rich { colour: false }.format(
+                    width,
+                    "/",
+                    Some(DisplayContext::new(0, &"-".repeat(len), needle.into()))
+                ),
             );
             assert_eq!(
                 if len < width - preambule.len() {

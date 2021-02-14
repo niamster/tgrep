@@ -9,7 +9,7 @@ use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
 use log::{debug, error, info, warn};
 
-use crate::utils::display::Display;
+use crate::utils::display::{Display, DisplayContext};
 use crate::utils::filters::Filters;
 use crate::utils::lines::LinesReader;
 use crate::utils::matcher::Matcher;
@@ -114,7 +114,10 @@ impl Walker {
                     match line {
                         Ok(line) => {
                             if let Some(needle) = matcher(&line) {
-                                display.display(reader.path(), lno, &line, &needle);
+                                display.display(
+                                    reader.path(),
+                                    Some(DisplayContext::new(lno, &line, needle)),
+                                );
                                 matches += 1;
                                 if matches >= max {
                                     return;
