@@ -84,7 +84,7 @@ pub struct Patterns {
 }
 
 impl Patterns {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Patterns {
             whitelist: vec![],
             blacklist: vec![],

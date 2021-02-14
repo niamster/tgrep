@@ -17,36 +17,70 @@ use crate::utils::patterns::{Patterns, ToPatterns};
 
 #[derive(Clone)]
 pub struct Walker {
-    tpool: ThreadPool,
+    tpool: Option<ThreadPool>,
     ignore_patterns: Patterns,
     ignore_files: Vec<String>,
     file_filters: Filters,
     matcher: Matcher,
-    max: usize,
+    max_matches_per_file: usize,
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
 }
 
+pub struct WalkerBuilder(Walker);
+
+impl WalkerBuilder {
+    pub fn new(matcher: Matcher, display: Arc<dyn Display>) -> Self {
+        WalkerBuilder {
+            0: Walker::new(matcher, display),
+        }
+    }
+
+    pub fn thread_pool(mut self, tpool: ThreadPool) -> WalkerBuilder {
+        self.0.tpool = Some(tpool);
+        self
+    }
+
+    pub fn ignore_patterns(mut self, ignore_patterns: Patterns) -> WalkerBuilder {
+        self.0.ignore_patterns = ignore_patterns;
+        self
+    }
+
+    pub fn ignore_files(mut self, ignore_files: Vec<String>) -> WalkerBuilder {
+        self.0.ignore_files = ignore_files;
+        self
+    }
+
+    pub fn file_filters(mut self, file_filters: Filters) -> WalkerBuilder {
+        self.0.file_filters = file_filters;
+        self
+    }
+
+    pub fn max_matches_per_file(mut self, max_matches_per_file: usize) -> WalkerBuilder {
+        self.0.max_matches_per_file = max_matches_per_file;
+        self
+    }
+
+    pub fn ignore_symlinks(mut self, ignore_symlinks: bool) -> WalkerBuilder {
+        self.0.ignore_symlinks = ignore_symlinks;
+        self
+    }
+
+    pub fn build(self) -> Walker {
+        self.0
+    }
+}
+
 impl Walker {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        tpool: ThreadPool,
-        ignore_patterns: Patterns,
-        ignore_files: Vec<String>,
-        file_filters: Filters,
-        matcher: Matcher,
-        max: usize,
-        ignore_symlinks: bool,
-        display: Arc<dyn Display>,
-    ) -> Self {
+    pub fn new(matcher: Matcher, display: Arc<dyn Display>) -> Self {
         Walker {
-            tpool,
-            ignore_patterns,
-            ignore_files,
-            file_filters,
+            tpool: None,
+            ignore_patterns: Patterns::empty(),
+            ignore_files: vec![],
+            file_filters: Filters::empty(),
             matcher,
-            max,
-            ignore_symlinks,
+            max_matches_per_file: usize::MAX,
+            ignore_symlinks: false,
             display,
         }
     }
@@ -120,16 +154,11 @@ impl Walker {
             let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
             let mut ignore_patterns = ignore_files.to_patterns();
             ignore_patterns.extend(&self.ignore_patterns);
-            let walker = Walker::new(
-                self.tpool.clone(),
-                ignore_patterns.clone(),
-                self.ignore_files.clone(),
-                self.file_filters.clone(),
-                self.matcher.clone(),
-                self.max,
-                self.ignore_symlinks,
-                self.display.clone(),
-            );
+            let walker = {
+                let mut walker = self.clone();
+                walker.ignore_patterns = ignore_patterns.clone();
+                walker
+            };
             let wg = WaitGroup::new();
             for entry in entries
                 .iter()
@@ -144,13 +173,18 @@ impl Walker {
                                 continue;
                             }
                             let matcher = self.matcher.clone();
-                            let max = self.max;
+                            let max = self.max_matches_per_file;
                             let display = self.display.clone();
-                            let wg = wg.clone();
-                            self.tpool.spawn_ok(async move {
-                                Walker::grep(&path, matcher, max, display);
-                                drop(wg);
-                            });
+                            match &self.tpool {
+                                Some(tpool) => {
+                                    let wg = wg.clone();
+                                    tpool.spawn_ok(async move {
+                                        Walker::grep(&path, matcher, max, display);
+                                        drop(wg);
+                                    });
+                                }
+                                None => Walker::grep(&path, matcher, max, display),
+                            }
                         } else {
                             walker.walk_with_parents(&entry.path(), &{
                                 let mut parents = parents.to_owned();
@@ -164,7 +198,12 @@ impl Walker {
             }
             wg.wait();
         } else if file_type.is_file() {
-            Walker::grep(path, self.matcher.clone(), self.max, self.display.clone());
+            Walker::grep(
+                path,
+                self.matcher.clone(),
+                self.max_matches_per_file,
+                self.display.clone(),
+            );
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {
                 info!("Skipping symlink '{}'", path.display());

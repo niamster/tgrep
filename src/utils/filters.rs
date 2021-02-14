@@ -6,6 +6,10 @@ pub struct Filters {
 }
 
 impl Filters {
+    pub fn empty() -> Self {
+        Filters { patterns: vec![] }
+    }
+
     pub fn new(strings: &[String]) -> Result<Self, Error> {
         let mut filters = Filters { patterns: vec![] };
         for pattern in strings {
