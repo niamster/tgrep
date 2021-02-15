@@ -13,11 +13,11 @@ type Range = std::ops::Range<usize>;
 pub struct DisplayContext<'a> {
     lno: usize,
     line: &'a str,
-    needle: Match,
+    needle: Vec<Match>,
 }
 
 impl<'a> DisplayContext<'a> {
-    pub fn new(lno: usize, line: &'a str, needle: Match) -> Self {
+    pub fn new(lno: usize, line: &'a str, needle: Vec<Match>) -> Self {
         DisplayContext { lno, line, needle }
     }
 }
@@ -74,13 +74,55 @@ pub enum Format {
 }
 
 impl Format {
-    fn rich_format(
+    fn rich_format_many(
+        &self,
+        _width: usize,
+        path: &str,
+        lno: usize,
+        line: &str,
+        needles: Vec<Range>,
+        colour: bool,
+    ) -> String {
+        assert!(needles.len() >= 2);
+        let lno = lno.to_string();
+        let mut formatted = Vec::with_capacity(2 * needles.len() + 2);
+        formatted.push(if colour {
+            format!("{}:{} ", Colour::Blue.paint(path), Colour::Green.paint(lno))
+        } else {
+            format!("{}:{} ", path, lno)
+        });
+        for (idx, needle) in needles.iter().enumerate() {
+            assert!(needle.end >= needle.start);
+            assert!(needle.end <= line.len());
+            if idx == 0 {
+                if needle.start > 0 {
+                    formatted.push(line[..needle.start].to_string());
+                }
+            } else {
+                let prev = &needles[idx - 1];
+                formatted.push(line[prev.end..needle.start].to_string());
+            }
+            let what = &line[needle.start..needle.end];
+            formatted.push(if colour {
+                Colour::Red.paint(what).to_string()
+            } else {
+                what.to_string()
+            });
+        }
+        let last = needles.last().unwrap();
+        if last.end < line.len() {
+            formatted.push(line[last.end..].to_string());
+        }
+        formatted.join("")
+    }
+
+    fn rich_format_one(
         &self,
         width: usize,
         path: &str,
         lno: usize,
         line: &str,
-        needle: Range,
+        needle: &Range,
         colour: bool,
     ) -> String {
         assert!(needle.end >= needle.start);
@@ -144,6 +186,22 @@ impl Format {
         }
     }
 
+    fn rich_format(
+        &self,
+        width: usize,
+        path: &str,
+        lno: usize,
+        line: &str,
+        needles: Vec<Range>,
+        colour: bool,
+    ) -> String {
+        if needles.len() == 1 {
+            self.rich_format_one(width, path, lno, line, &needles[0], colour)
+        } else {
+            self.rich_format_many(width, path, lno, line, needles, colour)
+        }
+    }
+
     fn format_path(&self, path: &str, colour: bool) -> String {
         if colour {
             Colour::Blue.paint(path).to_string()
@@ -157,9 +215,14 @@ impl OutputFormat for Format {
     fn format(&self, width: usize, path: &str, context: Option<DisplayContext>) -> String {
         match self {
             Format::Rich { colour } => match context {
-                Some(ctx) => {
-                    self.rich_format(width, path, ctx.lno, ctx.line, ctx.needle.into(), *colour)
-                }
+                Some(ctx) => self.rich_format(
+                    width,
+                    path,
+                    ctx.lno,
+                    ctx.line,
+                    ctx.needle.into_iter().map(Into::into).collect(),
+                    *colour,
+                ),
                 None => self.format_path(path, *colour),
             },
             Format::PathOnly { colour } => self.format_path(path, *colour),
@@ -192,7 +255,11 @@ mod tests {
                 Format::Rich { colour: false }.format(
                     width,
                     "/",
-                    Some(DisplayContext::new(0, &"-".repeat(len), needle.into()))
+                    Some(DisplayContext::new(
+                        0,
+                        &"-".repeat(len),
+                        vec![needle.into()]
+                    ))
                 ),
             );
             assert_eq!(

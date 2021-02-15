@@ -110,19 +110,22 @@ fn main() -> Result<(), Error> {
         // 3. https://github.com/rust-lang/rust/issues/29625
         let invert = args.invert;
         let regexp = regexp;
-        move |line: &str| -> Option<Match> {
+        move |line: &str| -> Option<Vec<Match>> {
             let option = if invert {
-                Some(Match::new(0, line.len()))
+                Some(vec![Match::new(0, line.len())])
             } else {
                 None
             };
-            if line.is_empty() {
-                return option.xor(None);
+            let mut matches = vec![];
+            for m in regexp.find_iter(line) {
+                matches.push(Match::new(m.start(), m.end()));
             }
-            regexp
-                .find(line)
-                .map(|v| Match::new(v.start(), v.end()))
-                .xor(option)
+            if matches.is_empty() {
+                None
+            } else {
+                Some(matches)
+            }
+            .xor(option)
         }
     };
     let display = {

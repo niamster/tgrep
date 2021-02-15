@@ -6,7 +6,7 @@ pub struct Match {
     end: usize,
 }
 
-pub type Matcher = Arc<Box<dyn Fn(&str) -> Option<Match> + Send + Sync>>;
+pub type Matcher = Arc<Box<dyn Fn(&str) -> Option<Vec<Match>> + Send + Sync>>;
 
 impl Match {
     pub fn new(start: usize, end: usize) -> Self {
