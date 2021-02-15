@@ -1,6 +1,6 @@
 [package]
 name = "tgrep"
-version = "1.1.0"
+version = "1.2.0"
 authors = ["Dmytro Milinevskyi <dmilinevskyi@gmail.com>"]
 description = "Toy grep that honors .gitignore"
 license = "Unlicense"
