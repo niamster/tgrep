@@ -32,6 +32,7 @@ struct Cli {
     #[structopt(long = "no-colour", help = "Disable colours")]
     no_color: bool,
     #[structopt(
+        short = "I",
         long = "ignore",
         default_value = ".git/",
         number_of_values = 1,
