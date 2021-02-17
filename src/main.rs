@@ -34,12 +34,14 @@ struct Cli {
     #[structopt(
         long = "ignore",
         default_value = ".git/",
+        number_of_values = 1,
         help = "Default ignore pattern"
     )]
     ignore_patterns: Vec<String>,
     #[structopt(
         long = "ignore-file",
         default_value = ".gitignore",
+        number_of_values = 1,
         help = "Default ignore file name"
     )]
     ignore_files: Vec<String>,
