@@ -22,7 +22,7 @@ fn generic_grep<T: LinesReader>(reader: &T, matcher: Matcher, on_match: OnMatch,
                         total += 1;
                         if let Some(needle) = matcher(&line) {
                             matches += 1;
-                            if on_match(DisplayContext::new(lno, &line, needle)) {
+                            if on_match(DisplayContext::new(lno + 1, &line, needle)) {
                                 break;
                             }
                         }
