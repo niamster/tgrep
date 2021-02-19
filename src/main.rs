@@ -18,6 +18,7 @@ use crate::utils::matcher::Match;
 use crate::utils::patterns::Patterns;
 use crate::utils::stdin::Stdin;
 use crate::utils::walker::WalkerBuilder;
+use crate::utils::writer::StdoutWriter;
 
 #[derive(Debug, StructOpt)]
 struct Cli {
@@ -143,6 +144,7 @@ fn main() -> Result<(), Error> {
                     Format::Rich { colour: !no_color }
                 },
                 path_format,
+                Arc::new(StdoutWriter::new()),
             )
         }
     };

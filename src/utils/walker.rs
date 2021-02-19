@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env,
     fs::{self, DirEntry},
     path::PathBuf,
@@ -14,6 +15,7 @@ use crate::utils::filters::Filters;
 use crate::utils::grep::Grep;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
+use crate::utils::writer::BufferedWriter;
 
 #[derive(Clone)]
 pub struct Walker {
@@ -85,15 +87,135 @@ impl Walker {
         self.ignore_files.contains(&file_name)
     }
 
-    fn is_excluded(&self, patterns: &Patterns, entry: &DirEntry) -> bool {
+    fn is_excluded(&self, entry: &DirEntry) -> bool {
         let path = entry.path();
         let is_dir = path.is_dir();
         let path = path.to_str().unwrap();
-        let is_excluded = patterns.is_excluded(&path, is_dir);
+        let is_excluded = self.ignore_patterns.is_excluded(&path, is_dir);
         if is_excluded {
             info!("Skipping {:?}", entry.path());
         }
         is_excluded
+    }
+
+    fn walk_dir(&self, path: &PathBuf, parents: &[PathBuf]) {
+        let (ignore_files, entries): (Vec<_>, Vec<_>) = fs::read_dir(path)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .partition(|entry| self.is_ignore_file(entry));
+
+        let walker = {
+            let mut walker = self.clone();
+            let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
+            walker.ignore_patterns.extend(&ignore_files.to_patterns());
+            walker
+        };
+
+        let mut to_dive = BTreeSet::new();
+        let mut to_grep = Vec::new();
+
+        for entry in entries.iter().filter(|entry| !walker.is_excluded(entry)) {
+            let path = entry.path();
+            match entry.metadata() {
+                Ok(meta) => {
+                    let file_type = meta.file_type();
+                    if file_type.is_file() {
+                        if !self.file_filters.matches(path.to_str().unwrap()) {
+                            continue;
+                        }
+                        to_grep.push(path);
+                    } else {
+                        to_dive.insert(path);
+                    }
+                }
+                Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
+            }
+        }
+
+        let parents = {
+            let mut parents = parents.to_owned();
+            parents.push(path.clone());
+            parents
+        };
+        for entry in to_dive {
+            walker.walk_with_parents(&entry, &parents);
+        }
+
+        self.grep_many(&to_grep);
+    }
+
+    fn grep_many(&self, entries: &[PathBuf]) {
+        let writer = self.display.writer();
+        let mut writers = BTreeMap::new();
+        let wg = WaitGroup::new();
+        for entry in entries {
+            let entry = entry.clone();
+            let matcher = self.matcher.clone();
+            let writer = Arc::new(BufferedWriter::new());
+            let display = self.display.with_writer(writer.clone());
+            let grep = self.grep;
+            writers.insert(entry.clone(), writer);
+            match &self.tpool {
+                Some(tpool) => {
+                    let wg = wg.clone();
+                    tpool.spawn_ok(async move {
+                        (grep)(&entry, matcher, display);
+                        drop(wg);
+                    });
+                }
+                None => (grep)(&entry, matcher, display),
+            }
+        }
+        wg.wait();
+        for (_, w) in writers {
+            w.flush(&writer);
+        }
+    }
+
+    fn canonicalize(&self, orig: &PathBuf, resolved: &PathBuf) -> anyhow::Result<PathBuf> {
+        let cwd = env::current_dir()?;
+        let parent = orig
+            .parent()
+            .ok_or_else(|| anyhow::Error::msg("no parent"))?;
+        env::set_current_dir(&parent)?;
+        let path = resolved
+            .canonicalize()
+            .map_err(|e| anyhow::Error::new(e).context(format!("cwd {}", parent.display())));
+        env::set_current_dir(&cwd)?;
+        path
+    }
+
+    fn process_symlink(&self, orig: &PathBuf, resolved: &PathBuf, parents: &[PathBuf]) {
+        let path = self.canonicalize(orig, resolved);
+        if let Err(e) = path {
+            error!("Failed to canonicalize '{}': {}", resolved.display(), e);
+            return;
+        }
+        let path = path.unwrap();
+        if let Some(level) = parents.iter().position(|parent| *parent == path) {
+            error!(
+                "Symlink '{}' -> '{}' (dereferenced to '{}') loop detected at level {}",
+                orig.display(),
+                resolved.display(),
+                path.display(),
+                level,
+            );
+            return;
+        }
+        if parents.iter().any(|parent| path.starts_with(parent)) {
+            info!(
+                "Skipping symlink '{}' -> '{}' (dereferenced to '{}')",
+                orig.display(),
+                resolved.display(),
+                path.display(),
+            );
+            return;
+        }
+        self.walk_with_parents(&path, &{
+            let mut parents = parents.to_owned();
+            parents.push(path.clone());
+            parents
+        });
     }
 
     fn walk_with_parents(&self, path: &PathBuf, parents: &[PathBuf]) {
@@ -104,56 +226,7 @@ impl Walker {
         }
         let file_type = meta.unwrap().file_type();
         if file_type.is_dir() {
-            let (ignore_files, entries): (Vec<_>, Vec<_>) = fs::read_dir(path)
-                .unwrap()
-                .filter_map(|entry| entry.ok())
-                .partition(|entry| self.is_ignore_file(entry));
-            let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
-            let mut ignore_patterns = ignore_files.to_patterns();
-            ignore_patterns.extend(&self.ignore_patterns);
-            let walker = {
-                let mut walker = self.clone();
-                walker.ignore_patterns = ignore_patterns.clone();
-                walker
-            };
-            let wg = WaitGroup::new();
-            for entry in entries
-                .iter()
-                .filter(|entry| !self.is_excluded(&ignore_patterns, entry))
-            {
-                match entry.metadata() {
-                    Ok(meta) => {
-                        let file_type = meta.file_type();
-                        if file_type.is_file() {
-                            let path = entry.path();
-                            if !self.file_filters.matches(path.to_str().unwrap()) {
-                                continue;
-                            }
-                            let matcher = self.matcher.clone();
-                            let display = self.display.clone();
-                            let grep = self.grep;
-                            match &self.tpool {
-                                Some(tpool) => {
-                                    let wg = wg.clone();
-                                    tpool.spawn_ok(async move {
-                                        (grep)(&path, matcher, display);
-                                        drop(wg);
-                                    });
-                                }
-                                None => (walker.grep)(&path, matcher, display),
-                            }
-                        } else {
-                            walker.walk_with_parents(&entry.path(), &{
-                                let mut parents = parents.to_owned();
-                                parents.push(path.clone());
-                                parents
-                            });
-                        }
-                    }
-                    Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
-                }
-            }
-            wg.wait();
+            self.walk_dir(path, parents);
         } else if file_type.is_file() {
             (self.grep)(path, self.matcher.clone(), self.display.clone());
         } else if file_type.is_symlink() {
@@ -161,52 +234,8 @@ impl Walker {
                 info!("Skipping symlink '{}'", path.display());
                 return;
             }
-            let orig = path;
             match fs::read_link(path.as_path()) {
-                Ok(lpath) => {
-                    let canonicalize = || {
-                        let cwd = env::current_dir()?;
-                        let parent = path
-                            .parent()
-                            .ok_or_else(|| anyhow::Error::msg("No parent"))?;
-                        env::set_current_dir(&parent)?;
-                        let path = lpath.canonicalize().map_err(|e| {
-                            anyhow::Error::new(e).context(format!("cwd {}", parent.display()))
-                        });
-                        env::set_current_dir(&cwd)?;
-                        path
-                    };
-                    let path = canonicalize();
-                    if let Err(e) = path {
-                        error!("Failed to canonicalize '{}': {}", lpath.display(), e);
-                        return;
-                    }
-                    let path = path.unwrap();
-                    if let Some(level) = parents.iter().position(|parent| *parent == path) {
-                        error!(
-                            "Symlink '{}' -> '{}' (dereferenced to '{}') loop detected at level {}",
-                            orig.display(),
-                            lpath.display(),
-                            path.display(),
-                            level,
-                        );
-                        return;
-                    }
-                    if parents.iter().any(|parent| path.starts_with(parent)) {
-                        info!(
-                            "Skipping symlink '{}' -> '{}' (dereferenced to '{}')",
-                            orig.display(),
-                            lpath.display(),
-                            path.display(),
-                        );
-                        return;
-                    }
-                    self.walk_with_parents(&path, &{
-                        let mut parents = parents.to_owned();
-                        parents.push(path.clone());
-                        parents
-                    });
-                }
+                Ok(resolved) => self.process_symlink(path, &resolved, parents),
                 Err(e) => error!("Failed to read link '{}': {}", path.display(), e),
             }
         } else {

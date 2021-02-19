@@ -1,12 +1,9 @@
-use std::{
-    cmp,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{cmp, path::PathBuf, sync::Arc};
 
 use ansi_term::Colour;
 
 use crate::utils::matcher::Match;
+use crate::utils::writer::Writer;
 
 type Range = std::ops::Range<usize>;
 
@@ -24,6 +21,8 @@ impl<'a> DisplayContext<'a> {
 
 pub trait Display: Send + Sync {
     fn display(&self, path: &PathBuf, context: Option<DisplayContext>);
+    fn writer(&self) -> Arc<dyn Writer>;
+    fn with_writer(&self, writer: Arc<dyn Writer>) -> Arc<dyn Display>;
 }
 
 pub type PathFormat = Arc<Box<dyn Fn(&PathBuf) -> String + Send + Sync>>;
@@ -33,41 +32,56 @@ pub trait OutputFormat: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct DisplayTerminal<T> {
-    lock: Arc<Mutex<()>>,
+pub struct DisplayTerminal<T>
+where
+    T: Clone,
+{
     width: usize,
     format: T,
     path_format: PathFormat,
+    writer: Arc<dyn Writer>,
 }
 
 impl<T> DisplayTerminal<T>
 where
-    T: OutputFormat,
+    T: OutputFormat + Clone,
 {
-    pub fn new(width: usize, format: T, path_format: PathFormat) -> Self {
+    pub fn new(width: usize, format: T, path_format: PathFormat, writer: Arc<dyn Writer>) -> Self {
         DisplayTerminal {
-            lock: Arc::new(Mutex::new(())),
             width,
             format,
             path_format,
+            writer,
         }
     }
 }
 
 impl<T> Display for DisplayTerminal<T>
 where
-    T: OutputFormat,
+    T: OutputFormat + Clone + 'static,
 {
     fn display(&self, path: &PathBuf, context: Option<DisplayContext>) {
         let formated = self
             .format
             .format(self.width, &(self.path_format)(path), context);
-        let guard = self.lock.lock();
-        println!("{}", formated);
-        drop(guard);
+        self.writer.write(&formated);
+    }
+
+    fn writer(&self) -> Arc<dyn Writer> {
+        self.writer.clone()
+    }
+
+    fn with_writer(&self, writer: Arc<dyn Writer>) -> Arc<dyn Display> {
+        Arc::new(DisplayTerminal::new(
+            self.width,
+            self.format.clone(),
+            self.path_format.clone(),
+            writer,
+        ))
     }
 }
 
+#[derive(Clone)]
 pub enum Format {
     Rich { colour: bool },
     PathOnly { colour: bool },
