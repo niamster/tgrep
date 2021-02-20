@@ -161,18 +161,18 @@ impl Patterns {
         self.blacklist.dedup();
     }
 
-    pub fn is_excluded(&self, path: &str, is_dir: bool) -> bool {
+    pub fn is_excluded(&self, path: &str, is_dir: bool) -> Option<String> {
         for pattern in &self.whitelist {
             if pattern.matches(path, is_dir) {
-                return false;
+                return None;
             }
         }
         for pattern in &self.blacklist {
             if pattern.matches(path, is_dir) {
-                return true;
+                return Some(pattern.pattern.to_string());
             }
         }
-        false
+        None
     }
 }
 
@@ -260,46 +260,72 @@ mod tests {
 
             for tf in vec![true, false] {
                 // 0.
-                assert_eq!(true, patterns.is_excluded(&mkpath(" "), tf));
-                assert_eq!(true, patterns.is_excluded(&mkpath("bim"), tf));
-                assert_eq!(false, patterns.is_excluded(&mkpath("bim  "), tf));
-                assert_eq!(false, patterns.is_excluded(&mkpath("bam"), tf));
-                assert_eq!(true, patterns.is_excluded(&mkpath("bam  "), tf));
+                assert_eq!(true, patterns.is_excluded(&mkpath(" "), tf).is_some());
+                assert_eq!(true, patterns.is_excluded(&mkpath("bim"), tf).is_some());
+                assert_eq!(false, patterns.is_excluded(&mkpath("bim  "), tf).is_some());
+                assert_eq!(false, patterns.is_excluded(&mkpath("bam"), tf).is_some());
+                assert_eq!(true, patterns.is_excluded(&mkpath("bam  "), tf).is_some());
 
                 // 1.
-                assert_eq!(false, patterns.is_excluded(&mkpath("#boom"), tf));
-                assert_eq!(true, patterns.is_excluded(&mkpath("#kaboom"), tf));
+                assert_eq!(false, patterns.is_excluded(&mkpath("#boom"), tf).is_some());
+                assert_eq!(true, patterns.is_excluded(&mkpath("#kaboom"), tf).is_some());
 
                 // 2.
-                assert_eq!(true, patterns.is_excluded(&mkpath("foo"), tf));
-                assert_eq!(false, patterns.is_excluded(&mkpath("moo/foo"), tf));
+                assert_eq!(true, patterns.is_excluded(&mkpath("foo"), tf).is_some());
+                assert_eq!(
+                    false,
+                    patterns.is_excluded(&mkpath("moo/foo"), tf).is_some()
+                );
 
-                assert_eq!(true, patterns.is_excluded(&mkpath("zoo"), tf));
+                assert_eq!(true, patterns.is_excluded(&mkpath("zoo"), tf).is_some());
 
-                assert_eq!(true, patterns.is_excluded(&mkpath("bar/baz"), tf));
-                assert_eq!(false, patterns.is_excluded(&mkpath("buz/bar/baz"), tf));
+                assert_eq!(true, patterns.is_excluded(&mkpath("bar/baz"), tf).is_some());
+                assert_eq!(
+                    false,
+                    patterns.is_excluded(&mkpath("buz/bar/baz"), tf).is_some()
+                );
 
-                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/buz"), tf));
-                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/buzz"), tf));
+                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/buz"), tf).is_some());
+                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/buzz"), tf).is_some());
 
-                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/qux"), tf));
-                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/qux"), tf));
+                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/qux"), tf).is_some());
+                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/qux"), tf).is_some());
 
                 // 3.
-                assert_eq!(true, patterns.is_excluded(&mkpath("totorino"), tf));
-                assert_eq!(false, patterns.is_excluded(&mkpath("totoro"), tf));
-                assert_eq!(true, patterns.is_excluded(&mkpath("!totoro"), tf));
+                assert_eq!(
+                    true,
+                    patterns.is_excluded(&mkpath("totorino"), tf).is_some()
+                );
+                assert_eq!(false, patterns.is_excluded(&mkpath("totoro"), tf).is_some());
+                assert_eq!(true, patterns.is_excluded(&mkpath("!totoro"), tf).is_some());
 
                 // 5.
-                assert_eq!(true, patterns.is_excluded(&mkpath("boo/baz/boz/tata"), tf));
+                assert_eq!(
+                    true,
+                    patterns
+                        .is_excluded(&mkpath("boo/baz/boz/tata"), tf)
+                        .is_some()
+                );
 
-                assert_eq!(true, patterns.is_excluded(&mkpath("titi/baz/boz/titi"), tf));
+                assert_eq!(
+                    true,
+                    patterns
+                        .is_excluded(&mkpath("titi/baz/boz/titi"), tf)
+                        .is_some()
+                );
 
                 assert_eq!(
                     false,
-                    patterns.is_excluded(&mkpath("titi/tutu/baz/boz"), tf)
+                    patterns
+                        .is_excluded(&mkpath("titi/tutu/baz/boz"), tf)
+                        .is_some()
                 );
-                assert_eq!(true, patterns.is_excluded(&mkpath("tutu/baz/boz/titi"), tf));
+                assert_eq!(
+                    true,
+                    patterns
+                        .is_excluded(&mkpath("tutu/baz/boz/titi"), tf)
+                        .is_some()
+                );
             }
         }
     }

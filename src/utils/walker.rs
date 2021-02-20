@@ -91,11 +91,12 @@ impl Walker {
         let path = entry.path();
         let is_dir = path.is_dir();
         let path = path.to_str().unwrap();
-        let is_excluded = self.ignore_patterns.is_excluded(&path, is_dir);
-        if is_excluded {
-            info!("Skipping {:?}", entry.path());
+        if let Some(pattern) = self.ignore_patterns.is_excluded(&path, is_dir) {
+            info!("Skipping {:?} (pattern: '{}')", entry.path(), pattern);
+            true
+        } else {
+            false
         }
-        is_excluded
     }
 
     fn walk_dir(&self, path: &PathBuf, parents: &[PathBuf]) {
