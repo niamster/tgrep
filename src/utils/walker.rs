@@ -155,7 +155,7 @@ impl Walker {
         let mut writers = BTreeMap::new();
         let wg = WaitGroup::new();
         for entry in entries {
-            let entry = entry.clone();
+            let entry = Arc::new(entry.clone());
             let matcher = self.matcher.clone();
             let writer = Arc::new(BufferedWriter::new());
             let display = self.display.with_writer(writer.clone());
