@@ -166,7 +166,11 @@ impl Format {
             (needle.start, "")
         } else if needle.start > left_margin {
             let prefix = "[...] ";
-            (needle.start - left_margin + prefix.len(), prefix)
+            let mut offset = needle.start - left_margin + prefix.len();
+            while line.get(offset..needle.start) == None {
+                offset += 1;
+            }
+            (offset, prefix)
         } else {
             (0, "")
         };
@@ -174,7 +178,11 @@ impl Format {
             (needle.end, "")
         } else if line.len() - needle.end > right_margin {
             let suffix = " [...]";
-            (needle.end + right_margin - suffix.len(), suffix)
+            let mut offset = needle.end + right_margin - suffix.len();
+            while line.get(needle.end..offset) == None {
+                offset -= 1;
+            }
+            (offset, suffix)
         } else {
             (line.len(), "")
         };
