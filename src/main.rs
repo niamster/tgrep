@@ -20,6 +20,8 @@ use crate::utils::stdin::Stdin;
 use crate::utils::walker::WalkerBuilder;
 use crate::utils::writer::StdoutWriter;
 
+const GIT_DIR: &str = ".git/";
+
 #[derive(Debug, StructOpt)]
 struct Cli {
     #[structopt(short = "i", help = "Case-insensitive search")]
@@ -35,7 +37,7 @@ struct Cli {
     #[structopt(
         short = "I",
         long = "ignore",
-        default_value = ".git/",
+        default_value = GIT_DIR,
         number_of_values = 1,
         help = "Default ignore pattern"
     )]
@@ -148,6 +150,12 @@ fn main() -> Result<(), Error> {
             )
         }
     };
+    let ignore_patterns = {
+        let mut ignore_patterns = vec![GIT_DIR.to_owned()];
+        ignore_patterns.extend(args.ignore_patterns);
+        ignore_patterns.dedup();
+        ignore_patterns
+    };
     for path in paths {
         let path = path.as_path();
         // See some fun at https://github.com/rust-lang/rfcs/issues/2208
@@ -162,8 +170,7 @@ fn main() -> Result<(), Error> {
             }
         };
         let display = display(Arc::new(Box::new(path_format)));
-        let ignore_patterns =
-            Patterns::new(&fpath.as_path().to_str().unwrap(), &args.ignore_patterns);
+        let ignore_patterns = Patterns::new(&fpath.as_path().to_str().unwrap(), &ignore_patterns);
         let grep = if args.path_only {
             if args.invert {
                 grep::grep_matches_all_lines
