@@ -3,6 +3,7 @@ use std::{
     env,
     fs::{self, DirEntry},
     path::PathBuf,
+    rc::Rc,
     sync::Arc,
 };
 
@@ -20,9 +21,9 @@ use crate::utils::writer::BufferedWriter;
 #[derive(Clone)]
 pub struct Walker {
     tpool: Option<ThreadPool>,
-    ignore_patterns: Patterns,
-    ignore_files: Vec<String>,
-    file_filters: Filters,
+    ignore_patterns: Rc<Patterns>,
+    ignore_files: Rc<Vec<String>>,
+    file_filters: Rc<Filters>,
     grep: Grep<PathBuf>,
     matcher: Matcher,
     ignore_symlinks: bool,
@@ -44,17 +45,17 @@ impl WalkerBuilder {
     }
 
     pub fn ignore_patterns(mut self, ignore_patterns: Patterns) -> WalkerBuilder {
-        self.0.ignore_patterns = ignore_patterns;
+        self.0.ignore_patterns = Rc::new(ignore_patterns);
         self
     }
 
     pub fn ignore_files(mut self, ignore_files: Vec<String>) -> WalkerBuilder {
-        self.0.ignore_files = ignore_files;
+        self.0.ignore_files = Rc::new(ignore_files);
         self
     }
 
     pub fn file_filters(mut self, file_filters: Filters) -> WalkerBuilder {
-        self.0.file_filters = file_filters;
+        self.0.file_filters = Rc::new(file_filters);
         self
     }
 
@@ -73,7 +74,7 @@ impl Walker {
         Walker {
             tpool: None,
             ignore_patterns: Default::default(),
-            ignore_files: vec![],
+            ignore_files: Rc::new(vec![]),
             file_filters: Default::default(),
             grep,
             matcher,
@@ -108,7 +109,11 @@ impl Walker {
         let walker = {
             let mut walker = self.clone();
             let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
-            walker.ignore_patterns.extend(&ignore_files.to_patterns());
+            if !ignore_files.is_empty() {
+                let mut ignore_patterns = ignore_files.to_patterns();
+                ignore_patterns.extend(&walker.ignore_patterns);
+                walker.ignore_patterns = Rc::new(ignore_patterns);
+            }
             walker
         };
 

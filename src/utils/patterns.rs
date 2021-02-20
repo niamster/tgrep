@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, rc::Rc};
 
 use anyhow::Error;
 use log::{debug, error, trace};
@@ -45,16 +45,16 @@ use crate::utils::lines::LinesReader;
 
 #[derive(Clone, PartialEq)]
 struct Pattern {
-    pattern: glob::Pattern,
-    root: String,
+    pattern: Rc<glob::Pattern>,
+    root: Rc<String>,
     dir_only: bool,
 }
 
 impl Pattern {
     fn new(pattern: &str, root: &str, dir_only: bool) -> Result<Self, Error> {
         Ok(Pattern {
-            pattern: glob::Pattern::new(&pattern)?,
-            root: root.trim_end_matches('/').to_owned(),
+            pattern: Rc::new(glob::Pattern::new(&pattern)?),
+            root: Rc::new(root.trim_end_matches('/').to_owned()),
             dir_only,
         })
     }
@@ -63,7 +63,7 @@ impl Pattern {
         if self.dir_only && !is_dir {
             return false;
         }
-        let truncated = path.trim_start_matches(&self.root);
+        let truncated = path.trim_start_matches(&*self.root);
         let matches = self.pattern.matches(truncated);
         trace!(
             "Testing {:?} against {:?}: {} (root:{:?} truncated:{:?})",
