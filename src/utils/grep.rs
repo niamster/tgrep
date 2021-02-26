@@ -1,43 +1,33 @@
 use std::sync::Arc;
 
-use log::{debug, error, warn};
+use log::error;
 
 use crate::utils::display::{Display, DisplayContext};
 use crate::utils::lines::LinesReader;
-use crate::utils::matcher::Matcher;
+use crate::utils::matcher::{Matcher, MatcherOptions};
 
-pub type Grep<T> = fn(reader: &T, matcher: Matcher, display: Arc<dyn Display>);
+pub type Grep = fn(reader: Arc<dyn LinesReader>, matcher: Matcher, display: Arc<dyn Display>);
 
 type OnMatch = Box<dyn Fn(DisplayContext) -> bool>;
 type OnEnd = Box<dyn Fn(usize, usize)>;
 
-fn generic_grep<T: LinesReader>(reader: &T, matcher: Matcher, on_match: OnMatch, on_end: OnEnd) {
+fn generic_grep(reader: Arc<dyn LinesReader>, matcher: Matcher, on_match: OnMatch, on_end: OnEnd) {
+    if let Ok(map) = reader.map() {
+        if matcher(&map, MatcherOptions::FUZZY).is_none() {
+            return;
+        }
+    }
     let mut matches = 0;
     let mut total = 0;
     match reader.lines() {
-        Ok(lines) => {
-            for (lno, line) in lines.enumerate() {
-                match line {
-                    Ok(line) => {
-                        total += 1;
-                        if let Some(needle) = matcher(&line) {
-                            matches += 1;
-                            if on_match(DisplayContext::new(lno + 1, &line, needle)) {
-                                break;
-                            }
-                        }
+        Ok(mut lines) => {
+            while let Some(line) = lines.next() {
+                total += 1;
+                if let Some(needle) = matcher(&line, MatcherOptions::EXACT(usize::MAX)) {
+                    matches += 1;
+                    if on_match(DisplayContext::new(total, &line, needle)) {
+                        break;
                     }
-                    Err(e) => match e.kind() {
-                        std::io::ErrorKind::InvalidData => {
-                            // Likely binary file
-                            debug!("Failed to read '{}': {}", reader.path().display(), e);
-                            return;
-                        }
-                        _ => {
-                            warn!("Failed to read '{}': {}", reader.path().display(), e);
-                            return;
-                        }
-                    },
                 }
             }
         }
@@ -46,7 +36,7 @@ fn generic_grep<T: LinesReader>(reader: &T, matcher: Matcher, on_match: OnMatch,
     on_end(total, matches);
 }
 
-pub fn grep<T: LinesReader>(reader: &T, matcher: Matcher, display: Arc<dyn Display>) {
+pub fn grep(reader: Arc<dyn LinesReader>, matcher: Matcher, display: Arc<dyn Display>) {
     let path = reader.path().clone();
     let display = display.clone();
     generic_grep(
@@ -60,7 +50,11 @@ pub fn grep<T: LinesReader>(reader: &T, matcher: Matcher, display: Arc<dyn Displ
     );
 }
 
-pub fn grep_matches_once<T: LinesReader>(reader: &T, matcher: Matcher, display: Arc<dyn Display>) {
+pub fn grep_matches_once(
+    reader: Arc<dyn LinesReader>,
+    matcher: Matcher,
+    display: Arc<dyn Display>,
+) {
     let path = reader.path().clone();
     let display = display.clone();
     generic_grep(
@@ -74,8 +68,8 @@ pub fn grep_matches_once<T: LinesReader>(reader: &T, matcher: Matcher, display: 
     );
 }
 
-pub fn grep_matches_all_lines<T: LinesReader>(
-    reader: &T,
+pub fn grep_matches_all_lines(
+    reader: Arc<dyn LinesReader>,
     matcher: Matcher,
     display: Arc<dyn Display>,
 ) {
