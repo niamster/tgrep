@@ -14,7 +14,7 @@ mod utils;
 use crate::utils::display::{DisplayTerminal, Format, PathFormat};
 use crate::utils::filters::Filters;
 use crate::utils::grep;
-use crate::utils::matcher::Match;
+use crate::utils::matcher::{Match, MatcherOptions};
 use crate::utils::patterns::Patterns;
 use crate::utils::stdin::Stdin;
 use crate::utils::walker::WalkerBuilder;
@@ -116,22 +116,37 @@ fn main() -> Result<(), Error> {
         // 3. https://github.com/rust-lang/rust/issues/29625
         let invert = args.invert;
         let regexp = regexp;
-        move |line: &str| -> Option<Vec<Match>> {
+        move |line: &str, options| -> Option<Vec<Match>> {
             let option = if invert {
                 Some(vec![Match::new(0, line.len())])
             } else {
                 None
             };
-            let mut matches = vec![];
-            for m in regexp.find_iter(line) {
-                matches.push(Match::new(m.start(), m.end()));
+            match options {
+                MatcherOptions::FUZZY => {
+                    let result = if let Some(pos) = regexp.shortest_match(line) {
+                        Some(vec![Match::new(0, pos)])
+                    } else {
+                        None
+                    };
+                    result.xor(option)
+                }
+                MatcherOptions::EXACT(max) => {
+                    let mut matches = vec![];
+                    for (i, m) in regexp.find_iter(line).enumerate() {
+                        matches.push(Match::new(m.start(), m.end()));
+                        if i + 1 == max {
+                            break;
+                        }
+                    }
+                    if matches.is_empty() {
+                        None
+                    } else {
+                        Some(matches)
+                    }
+                    .xor(option)
+                }
             }
-            if matches.is_empty() {
-                None
-            } else {
-                Some(matches)
-            }
-            .xor(option)
         }
     };
     let display = {
@@ -193,7 +208,11 @@ fn main() -> Result<(), Error> {
     if stdin.is_readable() {
         let path_format = |entry: &PathBuf| -> String { entry.to_str().unwrap().to_owned() };
         let display = display(Arc::new(Box::new(path_format)));
-        grep::grep(&stdin, Arc::new(Box::new(matcher)), Arc::new(display));
+        grep::grep(
+            Arc::new(stdin),
+            Arc::new(Box::new(matcher)),
+            Arc::new(display),
+        );
     }
 
     Ok(())

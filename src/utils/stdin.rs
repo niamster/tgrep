@@ -1,13 +1,6 @@
-use std::{
-    fs,
-    io::{self, BufRead},
-    iter::Iterator,
-    os::unix::fs::FileTypeExt,
-    os::unix::io::FromRawFd,
-    path::PathBuf,
-};
+use std::{fs, io, os::unix::fs::FileTypeExt, os::unix::io::FromRawFd, path::PathBuf};
 
-use crate::utils::lines::LinesReader;
+use crate::utils::lines::{LineIterator, Lines, LinesReader};
 
 pub struct Stdin {
     file: fs::File,
@@ -35,8 +28,11 @@ impl Stdin {
 }
 
 impl LinesReader for Stdin {
-    fn lines(&self) -> io::Result<Box<dyn Iterator<Item = io::Result<String>>>> {
-        Ok(Box::new(io::BufReader::new(self.file.try_clone()?).lines()))
+    fn lines(&self) -> anyhow::Result<Box<LineIterator>> {
+        Ok(Box::new(Lines::new(
+            io::BufReader::new(self.file.try_clone()?),
+            self.path.clone(),
+        )))
     }
 
     fn path(&self) -> &PathBuf {

@@ -9,11 +9,12 @@ use std::{
 
 use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 
 use crate::utils::display::Display;
 use crate::utils::filters::Filters;
 use crate::utils::grep::Grep;
+use crate::utils::mapped::Mapped;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
 use crate::utils::writer::BufferedWriter;
@@ -24,7 +25,7 @@ pub struct Walker {
     ignore_patterns: Rc<Patterns>,
     ignore_files: Rc<Vec<String>>,
     file_filters: Rc<Filters>,
-    grep: Grep<PathBuf>,
+    grep: Grep,
     matcher: Matcher,
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
@@ -33,7 +34,7 @@ pub struct Walker {
 pub struct WalkerBuilder(Walker);
 
 impl WalkerBuilder {
-    pub fn new(grep: Grep<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) -> Self {
+    pub fn new(grep: Grep, matcher: Matcher, display: Arc<dyn Display>) -> Self {
         WalkerBuilder {
             0: Walker::new(grep, matcher, display),
         }
@@ -70,7 +71,7 @@ impl WalkerBuilder {
 }
 
 impl Walker {
-    pub fn new(grep: Grep<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) -> Self {
+    pub fn new(grep: Grep, matcher: Matcher, display: Arc<dyn Display>) -> Self {
         Walker {
             tpool: None,
             ignore_patterns: Default::default(),
@@ -150,6 +151,22 @@ impl Walker {
         self.grep_many(&to_grep);
     }
 
+    fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
+        match Mapped::new(&entry) {
+            Ok(mapped) => {
+                if content_inspector::inspect(&*mapped).is_binary() {
+                    debug!("Skipping binary file '{}'", entry.display());
+                    return;
+                }
+                (grep)(Arc::new(mapped), matcher, display);
+            }
+            Err(e) => {
+                warn!("Failed to map file '{}': {}", entry.display(), e);
+                (grep)(entry, matcher, display);
+            }
+        }
+    }
+
     fn grep_many(&self, entries: &[PathBuf]) {
         let writer = self.display.writer();
         let mut writers = BTreeMap::new();
@@ -165,11 +182,11 @@ impl Walker {
                 Some(tpool) => {
                     let wg = wg.clone();
                     tpool.spawn_ok(async move {
-                        (grep)(&entry, matcher, display);
+                        Walker::grep(grep, entry, matcher, display);
                         drop(wg);
                     });
                 }
-                None => (grep)(&entry, matcher, display),
+                None => Walker::grep(grep, entry, matcher, display),
             }
         }
         wg.wait();
@@ -234,7 +251,12 @@ impl Walker {
         if file_type.is_dir() {
             self.walk_dir(path, parents);
         } else if file_type.is_file() {
-            (self.grep)(path, self.matcher.clone(), self.display.clone());
+            Walker::grep(
+                self.grep,
+                Arc::new(path.clone()),
+                self.matcher.clone(),
+                self.display.clone(),
+            );
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {
                 info!("Skipping symlink '{}'", path.display());

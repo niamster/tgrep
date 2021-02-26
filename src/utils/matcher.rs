@@ -6,7 +6,12 @@ pub struct Match {
     end: usize,
 }
 
-pub type Matcher = Arc<Box<dyn Fn(&str) -> Option<Vec<Match>> + Send + Sync>>;
+pub enum MatcherOptions {
+    FUZZY,
+    EXACT(usize),
+}
+
+pub type Matcher = Arc<Box<dyn Fn(&str, MatcherOptions) -> Option<Vec<Match>> + Send + Sync>>;
 
 impl Match {
     pub fn new(start: usize, end: usize) -> Self {

@@ -183,12 +183,10 @@ pub trait ToPatterns {
 impl ToPatterns for PathBuf {
     fn to_patterns(&self) -> Patterns {
         match self.lines() {
-            Ok(contents) => {
+            Ok(mut contents) => {
                 let mut lines = Vec::new();
-                for line in contents {
-                    if let Ok(line) = line {
-                        lines.push(line);
-                    }
+                while let Some(line) = contents.next() {
+                    lines.push(line.to_owned());
                 }
                 let root = self.as_path().parent().unwrap();
                 let root = root.canonicalize().unwrap();
