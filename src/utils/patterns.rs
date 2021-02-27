@@ -1,7 +1,8 @@
-use std::{path::PathBuf, rc::Rc};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Error;
 use log::{debug, error, trace};
+use rayon::prelude::*;
 
 use crate::utils::lines::LinesReader;
 
@@ -45,16 +46,16 @@ use crate::utils::lines::LinesReader;
 
 #[derive(Clone, PartialEq)]
 struct Pattern {
-    pattern: Rc<glob::Pattern>,
-    root: Rc<String>,
+    pattern: Arc<glob::Pattern>,
+    root: Arc<String>,
     dir_only: bool,
 }
 
 impl Pattern {
     fn new(pattern: &str, root: &str, dir_only: bool) -> Result<Self, Error> {
         Ok(Pattern {
-            pattern: Rc::new(glob::Pattern::new(&pattern)?),
-            root: Rc::new(root.trim_end_matches('/').to_owned()),
+            pattern: Arc::new(glob::Pattern::new(&pattern)?),
+            root: Arc::new(root.trim_end_matches('/').to_owned()),
             dir_only,
         })
     }
@@ -162,15 +163,17 @@ impl Patterns {
     }
 
     pub fn is_excluded(&self, path: &str, is_dir: bool) -> Option<String> {
-        for pattern in &self.whitelist {
-            if pattern.matches(path, is_dir) {
-                return None;
-            }
+        if (&self.whitelist)
+            .par_iter()
+            .any(|pattern| pattern.matches(path, is_dir))
+        {
+            return None;
         }
-        for pattern in &self.blacklist {
-            if pattern.matches(path, is_dir) {
-                return Some(pattern.pattern.to_string());
-            }
+        if let Some(pattern) = (&self.blacklist)
+            .par_iter()
+            .find_any(|pattern| pattern.matches(path, is_dir))
+        {
+            return Some(pattern.pattern.to_string());
         }
         None
     }

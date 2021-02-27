@@ -3,13 +3,13 @@ use std::{
     env,
     fs::{self, DirEntry},
     path::PathBuf,
-    rc::Rc,
     sync::Arc,
 };
 
 use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
 use log::{debug, error, info, warn};
+use rayon::prelude::*;
 
 use crate::utils::display::Display;
 use crate::utils::filters::Filters;
@@ -22,9 +22,9 @@ use crate::utils::writer::BufferedWriter;
 #[derive(Clone)]
 pub struct Walker {
     tpool: Option<ThreadPool>,
-    ignore_patterns: Rc<Patterns>,
-    ignore_files: Rc<Vec<String>>,
-    file_filters: Rc<Filters>,
+    ignore_patterns: Arc<Patterns>,
+    ignore_files: Arc<Vec<String>>,
+    file_filters: Arc<Filters>,
     grep: Grep,
     matcher: Matcher,
     ignore_symlinks: bool,
@@ -46,17 +46,17 @@ impl WalkerBuilder {
     }
 
     pub fn ignore_patterns(mut self, ignore_patterns: Patterns) -> WalkerBuilder {
-        self.0.ignore_patterns = Rc::new(ignore_patterns);
+        self.0.ignore_patterns = Arc::new(ignore_patterns);
         self
     }
 
     pub fn ignore_files(mut self, ignore_files: Vec<String>) -> WalkerBuilder {
-        self.0.ignore_files = Rc::new(ignore_files);
+        self.0.ignore_files = Arc::new(ignore_files);
         self
     }
 
     pub fn file_filters(mut self, file_filters: Filters) -> WalkerBuilder {
-        self.0.file_filters = Rc::new(file_filters);
+        self.0.file_filters = Arc::new(file_filters);
         self
     }
 
@@ -75,7 +75,7 @@ impl Walker {
         Walker {
             tpool: None,
             ignore_patterns: Default::default(),
-            ignore_files: Rc::new(vec![]),
+            ignore_files: Arc::new(vec![]),
             file_filters: Default::default(),
             grep,
             matcher,
@@ -113,7 +113,7 @@ impl Walker {
             if !ignore_files.is_empty() {
                 let mut ignore_patterns = ignore_files.to_patterns();
                 ignore_patterns.extend(&walker.ignore_patterns);
-                walker.ignore_patterns = Rc::new(ignore_patterns);
+                walker.ignore_patterns = Arc::new(ignore_patterns);
             }
             walker
         };
@@ -121,7 +121,12 @@ impl Walker {
         let mut to_dive = BTreeSet::new();
         let mut to_grep = Vec::new();
 
-        for entry in entries.iter().filter(|entry| !walker.is_excluded(entry)) {
+        let entries: Vec<_> = entries
+            .into_iter()
+            .par_bridge()
+            .filter(|entry| !walker.is_excluded(entry))
+            .collect();
+        for entry in entries {
             let path = entry.path();
             match entry.metadata() {
                 Ok(meta) => {
