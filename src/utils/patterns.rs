@@ -1,6 +1,9 @@
-use std::{default::Default, path::PathBuf, sync::Arc};
+use std::{
+    default::Default,
+    path::{self, PathBuf},
+    sync::Arc,
+};
 
-use anyhow::Error;
 use log::{debug, error, trace};
 
 use crate::utils::lines::LinesReader;
@@ -43,20 +46,35 @@ use crate::utils::lines::LinesReader;
 // 5.4 Other consecutive asterisks are considered regular asterisks and
 //     will match according to the previous rules.
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct Pattern {
-    pattern: Arc<glob::Pattern>,
+    pattern: Arc<regex::Regex>,
 }
 
 impl Pattern {
-    fn new(pattern: &str) -> Result<Self, Error> {
+    fn new(pattern: &str) -> anyhow::Result<Self> {
+        glob::Pattern::new(&pattern)?;
         Ok(Pattern {
-            pattern: Arc::new(glob::Pattern::new(&pattern)?),
+            pattern: Arc::new(Self::glob_to_regex(pattern)?),
         })
     }
 
+    fn glob_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
+        let pattern = pattern
+            .split("**")
+            .map(|pattern| {
+                let pattern = pattern.replace(".", "\\.");
+                let pattern = pattern.replace("?", &format!("[^{}]?", path::MAIN_SEPARATOR));
+                pattern.replace("*", &format!("[^{}]*", path::MAIN_SEPARATOR))
+            })
+            .collect::<Vec<String>>()
+            .join(".*");
+        let pattern = format!("^{}$", pattern);
+        Ok(regex::Regex::new(&pattern)?)
+    }
+
     fn matches(&self, path: &str) -> bool {
-        let matches = self.pattern.matches(path);
+        let matches = self.pattern.is_match(path);
         trace!(
             "Testing {:?} against {:?}: {}",
             path,
@@ -64,6 +82,12 @@ impl Pattern {
             if matches { "match" } else { "mismatch" },
         );
         matches
+    }
+}
+
+impl PartialEq for Pattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern.as_str() == other.pattern.as_str()
     }
 }
 
@@ -77,7 +101,7 @@ struct PatternSet {
 impl PatternSet {
     fn new(root: &str) -> Self {
         PatternSet {
-            root: Arc::new(root.trim_end_matches('/').to_owned()),
+            root: Arc::new(root.trim_end_matches(path::MAIN_SEPARATOR).to_owned()),
             ..Default::default()
         }
     }
