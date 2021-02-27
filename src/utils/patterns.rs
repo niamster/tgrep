@@ -1,8 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{default::Default, path::PathBuf, sync::Arc};
 
 use anyhow::Error;
 use log::{debug, error, trace};
-use rayon::prelude::*;
 
 use crate::utils::lines::LinesReader;
 
@@ -47,116 +46,152 @@ use crate::utils::lines::LinesReader;
 #[derive(Clone, PartialEq)]
 struct Pattern {
     pattern: Arc<glob::Pattern>,
-    root: Arc<String>,
-    dir_only: bool,
 }
 
 impl Pattern {
-    fn new(pattern: &str, root: &str, dir_only: bool) -> Result<Self, Error> {
+    fn new(pattern: &str) -> Result<Self, Error> {
         Ok(Pattern {
             pattern: Arc::new(glob::Pattern::new(&pattern)?),
-            root: Arc::new(root.trim_end_matches('/').to_owned()),
-            dir_only,
         })
     }
 
-    fn matches(&self, path: &str, is_dir: bool) -> bool {
-        if self.dir_only && !is_dir {
-            return false;
+    fn matches(&self, path: &str) -> bool {
+        let matches = self.pattern.matches(path);
+        trace!(
+            "Testing {:?} against {:?}: {}",
+            path,
+            self.pattern.as_str(),
+            if matches { "match" } else { "mismatch" },
+        );
+        matches
+    }
+}
+
+#[derive(Clone, PartialEq, Default)]
+struct PatternSet {
+    root: Arc<String>,
+    dir_only: Vec<Pattern>,
+    all: Vec<Pattern>,
+}
+
+impl PatternSet {
+    fn new(root: &str) -> Self {
+        PatternSet {
+            root: Arc::new(root.trim_end_matches('/').to_owned()),
+            ..Default::default()
         }
+    }
+
+    fn push(&mut self, pattern: Pattern, dir_only: bool) {
+        if dir_only {
+            self.dir_only.push(pattern);
+        } else {
+            self.all.push(pattern);
+        }
+    }
+
+    fn matches(&self, path: &str, is_dir: bool) -> bool {
         // NOTE: this is faster than `path.trim_start_matches(&*self.root)`
         let truncated = if path.len() >= self.root.len() && path[..self.root.len()] == *self.root {
             &path[self.root.len()..]
         } else {
             path
         };
-        let matches = self.pattern.matches(truncated);
-        trace!(
-            "Testing {:?} against {:?}: {} (root:{:?} truncated:{:?})",
-            path,
-            self.pattern.as_str(),
-            if matches { "match" } else { "mismatch" },
-            self.root,
-            truncated,
-        );
-        matches
+        if is_dir {
+            let matches = self
+                .dir_only
+                .iter()
+                .any(|pattern| pattern.matches(truncated));
+            if matches {
+                return true;
+            }
+        }
+        self.all.iter().any(|pattern| pattern.matches(truncated))
     }
 }
 
 #[derive(Clone, Default)]
 pub struct Patterns {
-    whitelist: Vec<Pattern>,
-    blacklist: Vec<Pattern>,
+    whitelist: Vec<PatternSet>,
+    blacklist: Vec<PatternSet>,
 }
 
 impl Patterns {
-    pub fn new(root: &str, strings: &[String]) -> Self {
-        let mut patterns: Patterns = Default::default();
-        for pattern in strings {
-            let orig = pattern.clone();
-            let pattern = pattern.trim_start();
-            let pattern = if pattern.ends_with("\\ ") {
-                pattern
+    fn parse(root: &str, pattern: &str) -> Option<(anyhow::Result<Pattern>, bool, bool)> {
+        let orig = pattern;
+        let pattern = pattern.trim_start();
+        let pattern = if pattern.ends_with("\\ ") {
+            pattern
+        } else {
+            let pattern = pattern.trim_end();
+            if pattern == "\\" {
+                " "
             } else {
-                let pattern = pattern.trim_end();
-                if pattern == "\\" {
-                    " "
-                } else {
-                    pattern
-                }
-            };
-            if pattern.starts_with('#') || pattern.is_empty() {
-                continue;
+                pattern
             }
-            let pattern = pattern.replace("\\ ", " ");
-            let whitelist = pattern.starts_with('!');
-            let pattern = if whitelist {
-                &pattern[1..]
-            } else {
-                pattern.as_str()
-            };
-            let pattern = if pattern.starts_with("\\#") || pattern.starts_with("\\!") {
-                pattern.strip_prefix('\\').unwrap()
-            } else {
-                pattern
-            };
-            // `./.git` == `/.git`
-            let pattern = if pattern.starts_with("./") {
-                pattern.strip_prefix('.').unwrap()
-            } else {
-                pattern
-            };
-            let root_only = pattern.starts_with('/')
-                || (pattern.contains('/')
-                    && !pattern.ends_with('/')
-                    && !pattern.starts_with("**/")
-                    && !pattern.contains("/**/"));
-            let dir_only = pattern.ends_with('/') || pattern.ends_with("/*");
-            let pattern = pattern.trim_end_matches('/');
-            let pattern = pattern.trim_end_matches("/*");
-            let pattern = if root_only {
-                "/".to_owned() + pattern.trim_start_matches('/')
-            } else if !pattern.starts_with("**/") {
-                "**/".to_owned() + pattern
-            } else {
-                pattern.to_owned()
-            };
-            debug!(
-                "{:?} -> {:?} (root:{:?}, dir:{}, whitelist:{})",
-                orig, pattern, root, dir_only, whitelist,
-            );
-            #[allow(clippy::collapsible_if)]
-            match Pattern::new(&pattern, root, dir_only) {
-                Ok(pattern) => {
-                    if whitelist {
-                        patterns.whitelist.push(pattern)
+        };
+        if pattern.starts_with('#') || pattern.is_empty() {
+            return None;
+        }
+        let pattern = pattern.replace("\\ ", " ");
+        let whitelist = pattern.starts_with('!');
+        let pattern = if whitelist {
+            &pattern[1..]
+        } else {
+            pattern.as_str()
+        };
+        let pattern = if pattern.starts_with("\\#") || pattern.starts_with("\\!") {
+            pattern.strip_prefix('\\').unwrap()
+        } else {
+            pattern
+        };
+        // `./.git` == `/.git`
+        let pattern = if pattern.starts_with("./") {
+            pattern.strip_prefix('.').unwrap()
+        } else {
+            pattern
+        };
+        let root_only = pattern.starts_with('/')
+            || (pattern.contains('/')
+                && !pattern.ends_with('/')
+                && !pattern.starts_with("**/")
+                && !pattern.contains("/**/"));
+        let dir_only = pattern.ends_with('/') || pattern.ends_with("/*");
+        let pattern = pattern.trim_end_matches('/');
+        let pattern = pattern.trim_end_matches("/*");
+        let pattern = if root_only {
+            "/".to_owned() + pattern.trim_start_matches('/')
+        } else if !pattern.starts_with("**/") {
+            "**/".to_owned() + pattern
+        } else {
+            pattern.to_owned()
+        };
+        debug!(
+            "{:?} -> {:?} (root:{:?}, dir:{}, whitelist:{})",
+            orig, pattern, root, dir_only, whitelist,
+        );
+        Some((Pattern::new(&pattern), whitelist, dir_only))
+    }
+
+    pub fn new(root: &str, strings: &[String]) -> Self {
+        let mut whitelist = PatternSet::new(root);
+        let mut blacklist = PatternSet::new(root);
+        for pattern in strings {
+            match Self::parse(root, pattern) {
+                Some((Ok(pattern), is_whitelisted, dir_only)) => {
+                    if is_whitelisted {
+                        whitelist.push(pattern, dir_only)
                     } else {
-                        patterns.blacklist.push(pattern)
+                        blacklist.push(pattern, dir_only)
                     }
                 }
-                Err(e) => error!("Failed to compile pattern '{}': {}", pattern, e),
+                Some((Err(e), _, _)) => error!("Failed to compile pattern '{}': {}", pattern, e),
+                None => {}
             }
         }
+        let mut patterns: Patterns = Default::default();
+        patterns.whitelist.push(whitelist);
+        patterns.blacklist.push(blacklist);
         patterns
     }
 
@@ -167,20 +202,17 @@ impl Patterns {
         self.blacklist.dedup();
     }
 
-    pub fn is_excluded(&self, path: &str, is_dir: bool) -> Option<String> {
-        if (&self.whitelist)
-            .par_iter()
+    pub fn is_excluded(&self, path: &str, is_dir: bool) -> bool {
+        if self
+            .whitelist
+            .iter()
             .any(|pattern| pattern.matches(path, is_dir))
         {
-            return None;
+            return false;
         }
-        if let Some(pattern) = (&self.blacklist)
-            .par_iter()
-            .find_any(|pattern| pattern.matches(path, is_dir))
-        {
-            return Some(pattern.pattern.to_string());
-        }
-        None
+        self.blacklist
+            .iter()
+            .any(|pattern| pattern.matches(path, is_dir))
     }
 }
 
@@ -266,72 +298,46 @@ mod tests {
 
             for tf in vec![true, false] {
                 // 0.
-                assert_eq!(true, patterns.is_excluded(&mkpath(" "), tf).is_some());
-                assert_eq!(true, patterns.is_excluded(&mkpath("bim"), tf).is_some());
-                assert_eq!(false, patterns.is_excluded(&mkpath("bim  "), tf).is_some());
-                assert_eq!(false, patterns.is_excluded(&mkpath("bam"), tf).is_some());
-                assert_eq!(true, patterns.is_excluded(&mkpath("bam  "), tf).is_some());
+                assert_eq!(true, patterns.is_excluded(&mkpath(" "), tf));
+                assert_eq!(true, patterns.is_excluded(&mkpath("bim"), tf));
+                assert_eq!(false, patterns.is_excluded(&mkpath("bim  "), tf));
+                assert_eq!(false, patterns.is_excluded(&mkpath("bam"), tf));
+                assert_eq!(true, patterns.is_excluded(&mkpath("bam  "), tf));
 
                 // 1.
-                assert_eq!(false, patterns.is_excluded(&mkpath("#boom"), tf).is_some());
-                assert_eq!(true, patterns.is_excluded(&mkpath("#kaboom"), tf).is_some());
+                assert_eq!(false, patterns.is_excluded(&mkpath("#boom"), tf));
+                assert_eq!(true, patterns.is_excluded(&mkpath("#kaboom"), tf));
 
                 // 2.
-                assert_eq!(true, patterns.is_excluded(&mkpath("foo"), tf).is_some());
-                assert_eq!(
-                    false,
-                    patterns.is_excluded(&mkpath("moo/foo"), tf).is_some()
-                );
+                assert_eq!(true, patterns.is_excluded(&mkpath("foo"), tf));
+                assert_eq!(false, patterns.is_excluded(&mkpath("moo/foo"), tf));
 
-                assert_eq!(true, patterns.is_excluded(&mkpath("zoo"), tf).is_some());
+                assert_eq!(true, patterns.is_excluded(&mkpath("zoo"), tf));
 
-                assert_eq!(true, patterns.is_excluded(&mkpath("bar/baz"), tf).is_some());
-                assert_eq!(
-                    false,
-                    patterns.is_excluded(&mkpath("buz/bar/baz"), tf).is_some()
-                );
+                assert_eq!(true, patterns.is_excluded(&mkpath("bar/baz"), tf));
+                assert_eq!(false, patterns.is_excluded(&mkpath("buz/bar/baz"), tf));
 
-                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/buz"), tf).is_some());
-                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/buzz"), tf).is_some());
+                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/buz"), tf));
+                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/buzz"), tf));
 
-                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/qux"), tf).is_some());
-                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/qux"), tf).is_some());
+                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/qux"), tf));
+                assert_eq!(tf, patterns.is_excluded(&mkpath("baz/qux"), tf));
 
                 // 3.
-                assert_eq!(
-                    true,
-                    patterns.is_excluded(&mkpath("totorino"), tf).is_some()
-                );
-                assert_eq!(false, patterns.is_excluded(&mkpath("totoro"), tf).is_some());
-                assert_eq!(true, patterns.is_excluded(&mkpath("!totoro"), tf).is_some());
+                assert_eq!(true, patterns.is_excluded(&mkpath("totorino"), tf));
+                assert_eq!(false, patterns.is_excluded(&mkpath("totoro"), tf));
+                assert_eq!(true, patterns.is_excluded(&mkpath("!totoro"), tf));
 
                 // 5.
-                assert_eq!(
-                    true,
-                    patterns
-                        .is_excluded(&mkpath("boo/baz/boz/tata"), tf)
-                        .is_some()
-                );
+                assert_eq!(true, patterns.is_excluded(&mkpath("boo/baz/boz/tata"), tf));
 
-                assert_eq!(
-                    true,
-                    patterns
-                        .is_excluded(&mkpath("titi/baz/boz/titi"), tf)
-                        .is_some()
-                );
+                assert_eq!(true, patterns.is_excluded(&mkpath("titi/baz/boz/titi"), tf));
 
                 assert_eq!(
                     false,
-                    patterns
-                        .is_excluded(&mkpath("titi/tutu/baz/boz"), tf)
-                        .is_some()
+                    patterns.is_excluded(&mkpath("titi/tutu/baz/boz"), tf)
                 );
-                assert_eq!(
-                    true,
-                    patterns
-                        .is_excluded(&mkpath("tutu/baz/boz/titi"), tf)
-                        .is_some()
-                );
+                assert_eq!(true, patterns.is_excluded(&mkpath("tutu/baz/boz/titi"), tf));
             }
         }
     }

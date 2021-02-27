@@ -93,12 +93,11 @@ impl Walker {
         let path = entry.path();
         let is_dir = path.is_dir();
         let path = path.to_str().unwrap();
-        if let Some(pattern) = self.ignore_patterns.is_excluded(&path, is_dir) {
-            info!("Skipping {:?} (pattern: '{}')", entry.path(), pattern);
-            true
-        } else {
-            false
+        let skip = self.ignore_patterns.is_excluded(&path, is_dir);
+        if skip {
+            info!("Skipping {:?}", entry.path());
         }
+        skip
     }
 
     fn walk_dir(&self, path: &PathBuf, parents: &[PathBuf]) {
@@ -122,8 +121,7 @@ impl Walker {
         let mut to_grep = Vec::new();
 
         let entries: Vec<_> = entries
-            .into_iter()
-            .par_bridge()
+            .par_iter()
             .filter(|entry| !walker.is_excluded(entry))
             .collect();
         for entry in entries {
