@@ -64,7 +64,12 @@ impl Pattern {
         if self.dir_only && !is_dir {
             return false;
         }
-        let truncated = path.trim_start_matches(&*self.root);
+        // NOTE: this is faster than `path.trim_start_matches(&*self.root)`
+        let truncated = if path.len() >= self.root.len() && path[..self.root.len()] == *self.root {
+            &path[self.root.len()..]
+        } else {
+            path
+        };
         let matches = self.pattern.matches(truncated);
         trace!(
             "Testing {:?} against {:?}: {} (root:{:?} truncated:{:?})",
