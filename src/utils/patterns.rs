@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use log::{debug, error, trace};
+use log::{debug, error};
 
 use crate::utils::lines::LinesReader;
 
@@ -47,66 +47,28 @@ use crate::utils::lines::LinesReader;
 //     will match according to the previous rules.
 
 #[derive(Clone)]
-struct Pattern {
-    pattern: Arc<regex::Regex>,
-}
-
-impl Pattern {
-    fn new(pattern: &str) -> anyhow::Result<Self> {
-        glob::Pattern::new(&pattern)?;
-        Ok(Pattern {
-            pattern: Arc::new(Self::glob_to_regex(pattern)?),
-        })
-    }
-
-    fn glob_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
-        let pattern = pattern
-            .split("**")
-            .map(|pattern| {
-                let pattern = pattern.replace(".", "\\.");
-                let pattern = pattern.replace("?", &format!("[^{}]?", path::MAIN_SEPARATOR));
-                pattern.replace("*", &format!("[^{}]*", path::MAIN_SEPARATOR))
-            })
-            .collect::<Vec<String>>()
-            .join(".*");
-        let pattern = format!("^{}$", pattern);
-        Ok(regex::Regex::new(&pattern)?)
-    }
-
-    fn matches(&self, path: &str) -> bool {
-        let matches = self.pattern.is_match(path);
-        trace!(
-            "Testing {:?} against {:?}: {}",
-            path,
-            self.pattern.as_str(),
-            if matches { "match" } else { "mismatch" },
-        );
-        matches
-    }
-}
-
-impl PartialEq for Pattern {
-    fn eq(&self, other: &Self) -> bool {
-        self.pattern.as_str() == other.pattern.as_str()
-    }
-}
-
-#[derive(Clone, PartialEq, Default)]
 struct PatternSet {
     root: Arc<String>,
-    dir_only: Vec<Pattern>,
-    all: Vec<Pattern>,
+    dir_only: regex::RegexSet,
+    all: regex::RegexSet,
 }
 
-impl PatternSet {
+#[derive(Default)]
+struct PatternSetBuilder {
+    root: Arc<String>,
+    dir_only: Vec<String>,
+    all: Vec<String>,
+}
+
+impl PatternSetBuilder {
     fn new(root: &str) -> Self {
-        PatternSet {
+        PatternSetBuilder {
             root: Arc::new(root.trim_end_matches(path::MAIN_SEPARATOR).to_owned()),
             ..Default::default()
         }
     }
 
-    fn push(&mut self, pattern: Pattern, dir_only: bool) {
+    fn push(&mut self, pattern: String, dir_only: bool) {
         if dir_only {
             self.dir_only.push(pattern);
         } else {
@@ -114,6 +76,16 @@ impl PatternSet {
         }
     }
 
+    fn build(self) -> anyhow::Result<PatternSet> {
+        Ok(PatternSet {
+            root: self.root,
+            dir_only: regex::RegexSet::new(self.dir_only)?,
+            all: regex::RegexSet::new(self.all)?,
+        })
+    }
+}
+
+impl PatternSet {
     fn matches(&self, path: &str, is_dir: bool) -> bool {
         // NOTE: this is faster than `path.trim_start_matches(&*self.root)`
         let truncated = if path.len() >= self.root.len() && path[..self.root.len()] == *self.root {
@@ -122,15 +94,22 @@ impl PatternSet {
             path
         };
         if is_dir {
-            let matches = self
-                .dir_only
-                .iter()
-                .any(|pattern| pattern.matches(truncated));
+            let matches = self.dir_only.is_match(truncated);
             if matches {
                 return true;
             }
         }
-        self.all.iter().any(|pattern| pattern.matches(truncated))
+        self.all.is_match(truncated)
+    }
+}
+
+impl Default for PatternSet {
+    fn default() -> Self {
+        PatternSet {
+            root: Arc::new("/".to_owned()),
+            dir_only: regex::RegexSet::new(Vec::<&str>::new()).unwrap(),
+            all: regex::RegexSet::new(Vec::<&str>::new()).unwrap(),
+        }
     }
 }
 
@@ -141,7 +120,7 @@ pub struct Patterns {
 }
 
 impl Patterns {
-    fn parse(root: &str, pattern: &str) -> Option<(anyhow::Result<Pattern>, bool, bool)> {
+    fn parse(root: &str, pattern: &str) -> Option<(String, bool, bool)> {
         let orig = pattern;
         let pattern = pattern.trim_start();
         let pattern = if pattern.ends_with("\\ ") {
@@ -190,40 +169,54 @@ impl Patterns {
         } else {
             pattern.to_owned()
         };
+        let pattern = Self::glob_to_regex(&pattern);
         debug!(
             "{:?} -> {:?} (root:{:?}, dir:{}, whitelist:{})",
             orig, pattern, root, dir_only, whitelist,
         );
-        Some((Pattern::new(&pattern), whitelist, dir_only))
+        Some((pattern, whitelist, dir_only))
+    }
+
+    fn glob_to_regex(pattern: &str) -> String {
+        let pattern = pattern
+            .split("**")
+            .map(|pattern| {
+                let pattern = pattern.replace(".", "\\.");
+                let pattern = pattern.replace("?", &format!("[^{}]?", path::MAIN_SEPARATOR));
+                pattern.replace("*", &format!("[^{}]*", path::MAIN_SEPARATOR))
+            })
+            .collect::<Vec<String>>()
+            .join(".*");
+        format!("^{}$", pattern)
     }
 
     pub fn new(root: &str, strings: &[String]) -> Self {
-        let mut whitelist = PatternSet::new(root);
-        let mut blacklist = PatternSet::new(root);
+        let mut whitelist = PatternSetBuilder::new(root);
+        let mut blacklist = PatternSetBuilder::new(root);
         for pattern in strings {
-            match Self::parse(root, pattern) {
-                Some((Ok(pattern), is_whitelisted, dir_only)) => {
-                    if is_whitelisted {
-                        whitelist.push(pattern, dir_only)
-                    } else {
-                        blacklist.push(pattern, dir_only)
-                    }
+            if let Some((pattern, is_whitelisted, dir_only)) = Self::parse(root, pattern) {
+                if is_whitelisted {
+                    whitelist.push(pattern, dir_only)
+                } else {
+                    blacklist.push(pattern, dir_only)
                 }
-                Some((Err(e), _, _)) => error!("Failed to compile pattern '{}': {}", pattern, e),
-                None => {}
             }
         }
         let mut patterns: Patterns = Default::default();
-        patterns.whitelist.push(whitelist);
-        patterns.blacklist.push(blacklist);
+        match whitelist.build() {
+            Ok(whitelist) => patterns.whitelist.push(whitelist),
+            Err(e) => error!("Failed to compile whitelist: {}", e),
+        }
+        match blacklist.build() {
+            Ok(blacklist) => patterns.blacklist.push(blacklist),
+            Err(e) => error!("Failed to compile blacklist: {}", e),
+        }
         patterns
     }
 
     pub fn extend(&mut self, other: &Patterns) {
         self.whitelist.extend_from_slice(&other.whitelist);
-        self.whitelist.dedup();
         self.blacklist.extend_from_slice(&other.blacklist);
-        self.blacklist.dedup();
     }
 
     pub fn is_excluded(&self, path: &str, is_dir: bool) -> bool {
