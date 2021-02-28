@@ -14,6 +14,7 @@ type OnEnd = Box<dyn Fn(usize, usize)>;
 fn generic_grep(reader: Arc<dyn LinesReader>, matcher: Matcher, on_match: OnMatch, on_end: OnEnd) {
     if let Ok(map) = reader.map() {
         if matcher(&map, MatcherOptions::FUZZY).is_none() {
+            on_end(0, 0);
             return;
         }
     }
