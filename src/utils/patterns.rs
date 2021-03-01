@@ -1,7 +1,8 @@
-use std::{default::Default, path::PathBuf, sync::Arc};
+use std::{default::Default, fmt, path::PathBuf, sync::Arc};
 
 use anyhow::Error;
 use log::{debug, error, trace};
+use regex::Regex;
 
 use crate::utils::lines::LinesReader;
 
@@ -43,24 +44,100 @@ use crate::utils::lines::LinesReader;
 // 5.4 Other consecutive asterisks are considered regular asterisks and
 //     will match according to the previous rules.
 
+#[derive(PartialEq)]
+enum PatternType {
+    Exact(String),
+    Prefix(String),
+    Suffix(String),
+    StarSuffix(String),
+    PrefixStar(String),
+    Glob(glob::Pattern),
+    // Potentially more cases:
+    // 1. "**/foo/**"
+    // 2. "**/foo/**/bar"
+}
+
+impl fmt::Debug for PatternType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use PatternType::*;
+        match self {
+            Exact(pattern) => formatter.write_fmt(format_args!("Exact({:?})", pattern)),
+            Prefix(pattern) => formatter.write_fmt(format_args!("Prefix({:?})", pattern)),
+            Suffix(pattern) => formatter.write_fmt(format_args!("Suffix({:?})", pattern)),
+            StarSuffix(pattern) => formatter.write_fmt(format_args!("StarSuffix({:?})", pattern)),
+            PrefixStar(pattern) => formatter.write_fmt(format_args!("PrefixStar({:?})", pattern)),
+            Glob(pattern) => formatter.write_fmt(format_args!("Glob({:?})", pattern.as_str())),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct Pattern {
-    pattern: Arc<glob::Pattern>,
+    pattern: Arc<PatternType>,
 }
 
 impl Pattern {
     fn new(pattern: &str) -> Result<Self, Error> {
+        let transformed = if let Some(capture) = Self::re(r"^\*\*/\*([^\]\[?*]*)$", pattern) {
+            // `**/*foo`
+            PatternType::StarSuffix(capture)
+        } else if let Some(capture) = Self::re(r"^\*\*(/[^\]\[?*]*)$", pattern) {
+            // `**/foo`
+            PatternType::Suffix(capture)
+        } else if let Some(capture) = Self::re(r"^\*\*/([^\]\[?*]*)\*$", pattern) {
+            // `**/foo*`
+            PatternType::PrefixStar(capture)
+        } else if let Some(capture) = Self::re(r"^(/[^\]\[*?]*)\*$", pattern) {
+            // `/foo*`
+            PatternType::Prefix(capture)
+        } else if let Some(capture) = Self::re(r"^(/[^\]\[*?]*)$", pattern) {
+            // `/foo`
+            PatternType::Exact(capture)
+        } else {
+            PatternType::Glob(glob::Pattern::new(&pattern)?)
+        };
+        debug!("Transformed pattern {:?} -> {:?}", pattern, transformed);
         Ok(Pattern {
-            pattern: Arc::new(glob::Pattern::new(&pattern)?),
+            pattern: Arc::new(transformed),
         })
     }
 
+    fn re(regex: &str, pattern: &str) -> Option<String> {
+        if let Some(capture) = Regex::new(regex).unwrap().captures(pattern) {
+            Some(capture.get(1).unwrap().as_str().to_string())
+        } else {
+            None
+        }
+    }
+
     fn matches(&self, path: &str) -> bool {
-        let matches = self.pattern.matches(path);
+        let matches = match &*self.pattern {
+            PatternType::Exact(pattern) => pattern == path,
+            PatternType::Prefix(pattern) => {
+                path.len() > pattern.len() && &path[..pattern.len()] == pattern
+            }
+            PatternType::Suffix(pattern) => {
+                path.len() >= pattern.len() && &path[path.len() - pattern.len()..] == pattern
+            }
+            PatternType::PrefixStar(pattern) => {
+                if let Some(pos) = memchr::memrchr(b'/', path.as_bytes()) {
+                    let path = &path[pos + 1..];
+                    path.len() > pattern.len() && &path[..pattern.len()] == pattern
+                } else {
+                    false
+                }
+            }
+            PatternType::StarSuffix(pattern) => {
+                path.len() > pattern.len()
+                    && path.as_bytes()[path.len() - pattern.len() - 1] != b'/'
+                    && &path[path.len() - pattern.len()..] == pattern
+            }
+            PatternType::Glob(pattern) => pattern.matches(path),
+        };
         trace!(
             "Testing {:?} against {:?}: {}",
             path,
-            self.pattern.as_str(),
+            self.pattern,
             if matches { "match" } else { "mismatch" },
         );
         matches
@@ -281,7 +358,9 @@ mod tests {
             "/baz/buzz/*",
             "baz/qux/",
             // 3.
+            "/zoomzoom*",
             "toto*",
+            "*.ro",
             "!totoro",
             r"\!totoro",
             // 5.
@@ -324,9 +403,14 @@ mod tests {
                 assert_eq!(is_dir, patterns.is_excluded(&mkpath("baz/qux"), is_dir));
 
                 // 3.
+                assert_eq!(true, patterns.is_excluded(&mkpath("zoomzoomzoom"), is_dir));
+                assert_eq!(false, patterns.is_excluded(&mkpath("zoomzoom"), is_dir));
                 assert_eq!(true, patterns.is_excluded(&mkpath("totorino"), is_dir));
+                assert_eq!(false, patterns.is_excluded(&mkpath("toto"), is_dir));
                 assert_eq!(false, patterns.is_excluded(&mkpath("totoro"), is_dir));
                 assert_eq!(true, patterns.is_excluded(&mkpath("!totoro"), is_dir));
+                assert_eq!(false, patterns.is_excluded(&mkpath(".ro"), is_dir));
+                assert_eq!(true, patterns.is_excluded(&mkpath("toto.ro"), is_dir));
 
                 // 5.
                 assert_eq!(
