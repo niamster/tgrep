@@ -123,10 +123,10 @@ impl Walker {
         let entries: Vec<_> = entries
             .par_iter()
             .filter(|entry| !walker.is_excluded(entry))
+            .map(|entry| (entry.path(), entry.metadata()))
             .collect();
-        for entry in entries {
-            let path = entry.path();
-            match entry.metadata() {
+        for (path, meta) in entries {
+            match meta {
                 Ok(meta) => {
                     let file_type = meta.file_type();
                     if file_type.is_file() {
