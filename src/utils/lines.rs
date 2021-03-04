@@ -94,3 +94,28 @@ where
         }
     }
 }
+
+#[derive(Clone, PartialOrd, PartialEq, Ord, Eq)]
+pub struct Zero {
+    path: PathBuf,
+}
+
+impl Zero {
+    pub fn new(path: PathBuf) -> Self {
+        Zero { path }
+    }
+}
+
+impl LinesReader for Zero {
+    fn map(&self) -> anyhow::Result<&str> {
+        Ok("")
+    }
+
+    fn lines(&self) -> anyhow::Result<Box<LineIterator>> {
+        panic!("not supported");
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}

@@ -14,6 +14,7 @@ use rayon::prelude::*;
 use crate::utils::display::Display;
 use crate::utils::filters::Filters;
 use crate::utils::grep::Grep;
+use crate::utils::lines::Zero;
 use crate::utils::mapped::Mapped;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
@@ -133,7 +134,7 @@ impl Walker {
                         if !self.file_filters.matches(path.to_str().unwrap()) {
                             continue;
                         }
-                        to_grep.push(path);
+                        to_grep.push((path, meta.len() as usize));
                     } else {
                         to_dive.insert(path);
                     }
@@ -170,26 +171,30 @@ impl Walker {
         }
     }
 
-    fn grep_many(&self, entries: &[PathBuf]) {
+    fn grep_many(&self, entries: &[(PathBuf, usize)]) {
         let writer = self.display.writer();
         let mut writers = BTreeMap::new();
         let wg = WaitGroup::new();
-        for entry in entries {
+        for (entry, len) in entries {
             let entry = Arc::new(entry.clone());
             let matcher = self.matcher.clone();
             let writer = Arc::new(BufferedWriter::new());
             let display = self.display.with_writer(writer.clone());
-            let grep = self.grep;
             writers.insert(entry.clone(), writer);
+            if *len == 0 {
+                (self.grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
+                continue;
+            }
             match &self.tpool {
                 Some(tpool) => {
+                    let grep = self.grep;
                     let wg = wg.clone();
                     tpool.spawn_ok(async move {
                         Walker::grep(grep, entry, matcher, display);
                         drop(wg);
                     });
                 }
-                None => Walker::grep(grep, entry, matcher, display),
+                None => Walker::grep(self.grep, entry, matcher, display),
             }
         }
         wg.wait();
