@@ -13,6 +13,24 @@ categories = ["command-line-utilities", "text-processing"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+name = "tgrep"
+path = "src/lib.rs"
+bench = false
+
+[[bin]]
+name = "tgrep"
+path = "src/main.rs"
+test = false
+bench = false
+
+[[bench]]
+name = "patterns"
+harness = false
+
+[dev-dependencies]
+criterion = "0.3"
+
 [dependencies]
 log = "0.4"
 env_logger = "0.8"
