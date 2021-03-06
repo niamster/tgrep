@@ -78,19 +78,19 @@ struct Pattern {
 
 impl Pattern {
     fn new(pattern: &str) -> Result<Self, Error> {
-        let transformed = if let Some(capture) = Self::re(r"^\*\*/\*([^\]\[?*]*)$", pattern) {
+        let transformed = if let Some(capture) = Self::re(r"**/\*([:]*)", pattern) {
             // `**/*foo`
             PatternType::StarSuffix(capture)
-        } else if let Some(capture) = Self::re(r"^\*\*(/[^\]\[?*]*)$", pattern) {
+        } else if let Some(capture) = Self::re(r"**(/[:]*)", pattern) {
             // `**/foo`
             PatternType::Suffix(capture)
-        } else if let Some(capture) = Self::re(r"^\*\*/([^\]\[?*]*)\*$", pattern) {
+        } else if let Some(capture) = Self::re(r"**/([:]*)\*", pattern) {
             // `**/foo*`
             PatternType::PrefixStar(capture)
-        } else if let Some(capture) = Self::re(r"^(/[^\]\[*?]*)\*$", pattern) {
+        } else if let Some(capture) = Self::re(r"(/[:]*)\*", pattern) {
             // `/foo*`
             PatternType::Prefix(capture)
-        } else if let Some(capture) = Self::re(r"^(/[^\]\[*?]*)$", pattern) {
+        } else if let Some(capture) = Self::re(r"(/[:]*)", pattern) {
             // `/foo`
             PatternType::Exact(capture)
         } else {
@@ -102,8 +102,15 @@ impl Pattern {
         })
     }
 
+    fn re_prepare(regex: &str) -> String {
+        let regex = regex.replace("**", r"\*\*");
+        let regex = regex.replace("[:]", r"[^\]\[*?]");
+        format!("^{}$", regex)
+    }
+
     fn re(regex: &str, pattern: &str) -> Option<String> {
-        if let Some(capture) = Regex::new(regex).unwrap().captures(pattern) {
+        let regex = Self::re_prepare(regex);
+        if let Some(capture) = Regex::new(&regex).unwrap().captures(pattern) {
             Some(capture.get(1).unwrap().as_str().to_string())
         } else {
             None
