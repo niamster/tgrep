@@ -334,7 +334,12 @@ mod tests {
     use env_logger;
 
     fn init() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        let _ = env_logger::builder()
+            .is_test(match std::env::var("RUST_LOG_CAPTURE") {
+                Ok(val) if val == "n" => false,
+                _ => true,
+            })
+            .try_init();
     }
 
     #[test]
