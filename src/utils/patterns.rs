@@ -96,7 +96,6 @@ impl Pattern {
         } else {
             PatternType::Glob(glob::Pattern::new(&pattern)?)
         };
-        debug!("Transformed pattern {:?} -> {:?}", pattern, transformed);
         Ok(Pattern {
             pattern: Arc::new(transformed),
         })
@@ -148,6 +147,12 @@ impl Pattern {
             if matches { "match" } else { "mismatch" },
         );
         matches
+    }
+}
+
+impl fmt::Debug for Pattern {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_fmt(format_args!("{:?}", self.pattern))
     }
 }
 
@@ -250,11 +255,12 @@ impl Patterns {
         } else {
             pattern.to_owned()
         };
+        let transformed = Pattern::new(&pattern);
         debug!(
-            "{:?} -> {:?} (root:{:?}, dir:{}, whitelist:{})",
-            orig, pattern, root, dir_only, whitelist,
+            "Transformed pattern {:?} -> {:?} -> {:?} (root:{:?}, dir:{}, whitelist:{})",
+            orig, pattern, transformed, root, dir_only, whitelist,
         );
-        Some((Pattern::new(&pattern), whitelist, dir_only))
+        Some((transformed, whitelist, dir_only))
     }
 
     pub fn new(root: &str, strings: &[String]) -> Self {
