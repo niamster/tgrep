@@ -8,6 +8,7 @@ pub struct Stdin {
 }
 
 impl Stdin {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let file = unsafe { fs::File::from_raw_fd(0) };
         Stdin {

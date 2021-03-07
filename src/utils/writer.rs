@@ -13,6 +13,7 @@ pub struct StdoutWriter {
 }
 
 impl StdoutWriter {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         StdoutWriter {
             lock: Arc::new(Mutex::new(())),
@@ -34,6 +35,7 @@ pub struct BufferedWriter {
 }
 
 impl BufferedWriter {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         BufferedWriter {
             lines: Arc::new(Mutex::new(RefCell::new(Vec::new()))),
