@@ -112,10 +112,20 @@ impl LinesReader for Zero {
     }
 
     fn lines(&self) -> anyhow::Result<Box<LineIterator>> {
-        panic!("not supported");
+        Ok(Box::new(self.clone()))
     }
 
     fn path(&self) -> &PathBuf {
         &self.path
+    }
+}
+
+impl StreamingIterator for Zero {
+    type Item = str;
+
+    fn advance(&mut self) {}
+
+    fn get(&self) -> Option<&Self::Item> {
+        None
     }
 }
