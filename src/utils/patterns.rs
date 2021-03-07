@@ -6,6 +6,37 @@ use regex::Regex;
 
 use crate::utils::lines::LinesReader;
 
+extern "C" {
+    fn memmem(
+        haystack: *const u8,
+        hlen: libc::size_t,
+        needle: *const u8,
+        nlen: libc::size_t,
+    ) -> *const u8;
+}
+
+fn find_in_string(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.len() > haystack.len() {
+        return None;
+    }
+    let res = unsafe {
+        memmem(
+            haystack.as_ptr(),
+            haystack.len(),
+            needle.as_ptr(),
+            needle.len(),
+        )
+    };
+    if res.is_null() {
+        return None;
+    }
+    let dist = unsafe { res.offset_from(haystack.as_ptr()) as usize };
+    if dist >= haystack.len() {
+        return None;
+    }
+    Some(dist)
+}
+
 // From https://git-scm.com/docs/gitignore
 //
 // 0.1 A blank line matches no files, so it can serve as a separator for readability.
@@ -51,10 +82,10 @@ enum PatternType {
     Suffix(String),
     StarSuffix(String),
     PrefixStar(String),
+    DStarTextDStarText((String, String)),
     Glob(glob::Pattern),
     // Potentially more cases:
     // 1. "**/foo/**"
-    // 2. "**/foo/**/bar"
 }
 
 impl fmt::Debug for PatternType {
@@ -66,6 +97,10 @@ impl fmt::Debug for PatternType {
             Suffix(pattern) => formatter.write_fmt(format_args!("Suffix({:?})", pattern)),
             StarSuffix(pattern) => formatter.write_fmt(format_args!("StarSuffix({:?})", pattern)),
             PrefixStar(pattern) => formatter.write_fmt(format_args!("PrefixStar({:?})", pattern)),
+            DStarTextDStarText((first, second)) => formatter.write_fmt(format_args!(
+                "DStarTextDStarText({:?}, {:?})",
+                first, second
+            )),
             Glob(pattern) => formatter.write_fmt(format_args!("Glob({:?})", pattern.as_str())),
         }
     }
@@ -90,6 +125,9 @@ impl Pattern {
         } else if let Some(capture) = Self::re(r"(/[:]*)\*", pattern) {
             // `/foo*`
             PatternType::Prefix(capture)
+        } else if let Some((first, second)) = Self::re2(r"**/([:]*/)**(/[:]*)", pattern) {
+            // `**/foo/**/bar`
+            PatternType::DStarTextDStarText((first, second))
         } else if let Some(capture) = Self::re(r"(/[:]*)", pattern) {
             // `/foo`
             PatternType::Exact(capture)
@@ -116,6 +154,18 @@ impl Pattern {
         }
     }
 
+    fn re2(regex: &str, pattern: &str) -> Option<(String, String)> {
+        let regex = Self::re_prepare(regex);
+        if let Some(capture) = Regex::new(&regex).unwrap().captures(pattern) {
+            Some((
+                capture.get(1).unwrap().as_str().to_string(),
+                capture.get(2).unwrap().as_str().to_string(),
+            ))
+        } else {
+            None
+        }
+    }
+
     fn matches(&self, path: &str) -> bool {
         let matches = match &*self.pattern {
             PatternType::Exact(pattern) => pattern == path,
@@ -137,6 +187,18 @@ impl Pattern {
                 path.len() > pattern.len()
                     && path.as_bytes()[path.len() - pattern.len() - 1] != b'/'
                     && &path[path.len() - pattern.len()..] == pattern
+            }
+            PatternType::DStarTextDStarText((first, second)) => {
+                if path.len() > first.len() + second.len() {
+                    if let Some(pos) = find_in_string(path, first) {
+                        let path = &path[pos + first.len()..];
+                        path.len() > second.len() && &path[path.len() - second.len()..] == second
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             }
             PatternType::Glob(pattern) => pattern.matches(path),
         };
@@ -356,6 +418,15 @@ mod tests {
     }
 
     #[test]
+    fn test_find_in_string() {
+        let test = |haystack: &str, needle: &str| {
+            assert_eq!(haystack.find(needle), find_in_string(haystack, needle));
+        };
+        test("foozoo", "bar");
+        test("foozoo", "zoo");
+    }
+
+    #[test]
     fn gitignore() {
         init();
 
@@ -440,7 +511,7 @@ mod tests {
                     true,
                     patterns.is_excluded(&mkpath("titi/baz/boz/titi"), is_dir)
                 );
-
+                assert_eq!(false, patterns.is_excluded(&mkpath("titi/titi"), is_dir));
                 assert_eq!(
                     false,
                     patterns.is_excluded(&mkpath("titi/tutu/baz/boz"), is_dir)
