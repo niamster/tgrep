@@ -20,11 +20,12 @@ use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
 use crate::utils::writer::BufferedWriter;
 
+static GIT_IGNORE: &str = ".gitignore";
+
 #[derive(Clone)]
 pub struct Walker {
     tpool: Option<ThreadPool>,
     ignore_patterns: Arc<Patterns>,
-    ignore_files: Arc<Vec<String>>,
     file_filters: Arc<Filters>,
     grep: Grep,
     matcher: Matcher,
@@ -51,11 +52,6 @@ impl WalkerBuilder {
         self
     }
 
-    pub fn ignore_files(mut self, ignore_files: Vec<String>) -> WalkerBuilder {
-        self.0.ignore_files = Arc::new(ignore_files);
-        self
-    }
-
     pub fn file_filters(mut self, file_filters: Filters) -> WalkerBuilder {
         self.0.file_filters = Arc::new(file_filters);
         self
@@ -76,7 +72,6 @@ impl Walker {
         Walker {
             tpool: None,
             ignore_patterns: Default::default(),
-            ignore_files: Arc::new(vec![]),
             file_filters: Default::default(),
             grep,
             matcher,
@@ -86,8 +81,7 @@ impl Walker {
     }
 
     fn is_ignore_file(&self, entry: &DirEntry) -> bool {
-        let file_name = entry.file_name().to_str().unwrap().to_string();
-        self.ignore_files.contains(&file_name)
+        Some(GIT_IGNORE) == entry.file_name().to_str()
     }
 
     fn is_excluded(&self, entry: &DirEntry) -> bool {
@@ -109,8 +103,8 @@ impl Walker {
 
         let walker = {
             let mut walker = self.clone();
-            let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
             if !ignore_files.is_empty() {
+                let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
                 let mut ignore_patterns = ignore_files.to_patterns();
                 ignore_patterns.extend(&walker.ignore_patterns);
                 walker.ignore_patterns = Arc::new(ignore_patterns);

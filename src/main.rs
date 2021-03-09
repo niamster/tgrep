@@ -43,13 +43,6 @@ struct Cli {
     )]
     ignore_patterns: Vec<String>,
     #[structopt(
-        long = "ignore-file",
-        default_value = ".gitignore",
-        number_of_values = 1,
-        help = "Default ignore file name"
-    )]
-    ignore_files: Vec<String>,
-    #[structopt(
         short = "f",
         default_value = "*",
         help = "File filter pattern",
@@ -199,7 +192,6 @@ fn main() -> Result<(), Error> {
             WalkerBuilder::new(grep, Arc::new(Box::new(matcher.clone())), Arc::new(display))
                 .thread_pool(tpool.clone())
                 .ignore_patterns(ignore_patterns)
-                .ignore_files(args.ignore_files.clone())
                 .file_filters(file_filters.clone())
                 .ignore_symlinks(args.ignore_symlinks)
                 .build();
