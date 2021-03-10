@@ -77,6 +77,7 @@ fn find_in_string(haystack: &str, needle: &str) -> Option<usize> {
 
 #[derive(PartialEq)]
 enum PatternType {
+    Any,
     Exact(String),
     Prefix(String),
     Suffix(String),
@@ -92,6 +93,7 @@ impl fmt::Debug for PatternType {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         use PatternType::*;
         match self {
+            Any => formatter.write_str("Any"),
             Exact(pattern) => formatter.write_fmt(format_args!("Exact({:?})", pattern)),
             Prefix(pattern) => formatter.write_fmt(format_args!("Prefix({:?})", pattern)),
             Suffix(pattern) => formatter.write_fmt(format_args!("Suffix({:?})", pattern)),
@@ -107,13 +109,15 @@ impl fmt::Debug for PatternType {
 }
 
 #[derive(Clone, PartialEq)]
-struct Pattern {
+pub(crate) struct Pattern {
     pattern: Arc<PatternType>,
 }
 
 impl Pattern {
-    fn new(pattern: &str) -> Result<Self, Error> {
-        let transformed = if let Some(capture) = Self::re(r"**/\*([:]*)", pattern) {
+    pub(crate) fn new(pattern: &str) -> Result<Self, Error> {
+        let transformed = if pattern == "*" || pattern == "**/*" {
+            PatternType::Any
+        } else if let Some(capture) = Self::re(r"**/\*([:]*)", pattern) {
             // `**/*foo`
             PatternType::StarSuffix(capture)
         } else if let Some(capture) = Self::re(r"**(/[:]*)", pattern) {
@@ -168,6 +172,7 @@ impl Pattern {
 
     fn matches(&self, path: &str) -> bool {
         let matches = match &*self.pattern {
+            PatternType::Any => true,
             PatternType::Exact(pattern) => pattern == path,
             PatternType::Prefix(pattern) => {
                 path.len() > pattern.len() && &path[..pattern.len()] == pattern
@@ -219,21 +224,21 @@ impl fmt::Debug for Pattern {
 }
 
 #[derive(Clone, PartialEq, Default)]
-struct PatternSet {
+pub(crate) struct PatternSet {
     root: Arc<String>,
     dir_only: Vec<Pattern>,
     all: Vec<Pattern>,
 }
 
 impl PatternSet {
-    fn new(root: &str) -> Self {
+    pub(crate) fn new(root: &str) -> Self {
         PatternSet {
             root: Arc::new(root.trim_end_matches('/').to_owned()),
             ..Default::default()
         }
     }
 
-    fn push(&mut self, pattern: Pattern, dir_only: bool) {
+    pub(crate) fn push(&mut self, pattern: Pattern, dir_only: bool) {
         if dir_only {
             self.dir_only.push(pattern);
         } else {
@@ -241,7 +246,7 @@ impl PatternSet {
         }
     }
 
-    fn matches(&self, path: &str, is_dir: bool) -> bool {
+    pub(crate) fn matches(&self, path: &str, is_dir: bool) -> bool {
         // NOTE: this is faster than `path.trim_start_matches(&*self.root)`
         let truncated = if path.len() >= self.root.len() && path[..self.root.len()] == *self.root {
             &path[self.root.len()..]
