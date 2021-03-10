@@ -35,11 +35,10 @@ struct Cli {
     #[structopt(long = "no-colour", help = "Disable colours")]
     no_color: bool,
     #[structopt(
-        short = "I",
-        long = "ignore",
-        default_value = GIT_DIR,
+        short = "e",
+        long = "exclude",
         number_of_values = 1,
-        help = "Default ignore pattern"
+        help = "Exclude pattern"
     )]
     ignore_patterns: Vec<String>,
     #[structopt(
