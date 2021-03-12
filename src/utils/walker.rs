@@ -9,7 +9,6 @@ use std::{
 use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
 use log::{debug, error, info, warn};
-use rayon::prelude::*;
 
 use crate::utils::display::Display;
 use crate::utils::filters::Filters;
@@ -114,7 +113,7 @@ impl Walker {
         let mut to_grep = Vec::new();
 
         let entries: Vec<_> = entries
-            .par_iter()
+            .iter()
             .filter_map(|entry| match entry.metadata() {
                 Ok(meta) => Some((entry.path(), meta)),
                 Err(e) => {
