@@ -84,13 +84,11 @@ impl Walker {
         Some(GIT_IGNORE) == entry.file_name().to_str()
     }
 
-    fn is_excluded(&self, entry: &DirEntry) -> bool {
-        let path = entry.path();
-        let is_dir = path.is_dir();
+    fn is_excluded(&self, path: &PathBuf, is_dir: bool) -> bool {
         let path = path.to_str().unwrap();
         let skip = self.ignore_patterns.is_excluded(&path, is_dir);
         if skip {
-            info!("Skipping {:?}", entry.path());
+            info!("Skipping {:?}", path);
         }
         skip
     }
@@ -117,23 +115,24 @@ impl Walker {
 
         let entries: Vec<_> = entries
             .par_iter()
-            .filter(|entry| !walker.is_excluded(entry))
-            .map(|entry| (entry.path(), entry.metadata()))
+            .filter_map(|entry| match entry.metadata() {
+                Ok(meta) => Some((entry.path(), meta)),
+                Err(e) => {
+                    error!("Failed to get path '{}' metadata: {}", path.display(), e);
+                    None
+                }
+            })
+            .filter(|(entry, meta)| !walker.is_excluded(entry, meta.is_dir()))
             .collect();
         for (path, meta) in entries {
-            match meta {
-                Ok(meta) => {
-                    let file_type = meta.file_type();
-                    if file_type.is_file() {
-                        if !self.file_filters.matches(path.to_str().unwrap()) {
-                            continue;
-                        }
-                        to_grep.push((path, meta.len() as usize));
-                    } else {
-                        to_dive.insert(path, meta);
-                    }
+            let file_type = meta.file_type();
+            if file_type.is_file() {
+                if !self.file_filters.matches(path.to_str().unwrap()) {
+                    continue;
                 }
-                Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
+                to_grep.push((path, meta.len() as usize));
+            } else {
+                to_dive.insert(path, meta);
             }
         }
 
