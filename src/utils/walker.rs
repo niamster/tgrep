@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     env,
     fs::{self, DirEntry},
     path::PathBuf,
@@ -112,7 +112,7 @@ impl Walker {
             walker
         };
 
-        let mut to_dive = BTreeSet::new();
+        let mut to_dive = BTreeMap::new();
         let mut to_grep = Vec::new();
 
         let entries: Vec<_> = entries
@@ -130,7 +130,7 @@ impl Walker {
                         }
                         to_grep.push((path, meta.len() as usize));
                     } else {
-                        to_dive.insert(path);
+                        to_dive.insert(path, meta);
                     }
                 }
                 Err(e) => error!("Failed to get path '{}' metadata: {}", path.display(), e),
@@ -142,8 +142,8 @@ impl Walker {
             parents.push(path.clone());
             parents
         };
-        for entry in to_dive {
-            walker.walk_with_parents(&entry, &parents);
+        for (entry, meta) in to_dive {
+            walker.walk_with_parents(&entry, Some(meta), &parents);
         }
 
         self.grep_many(&to_grep);
@@ -243,20 +243,25 @@ impl Walker {
             );
             return;
         }
-        self.walk_with_parents(&path, &{
+        self.walk_with_parents(&path, None, &{
             let mut parents = parents.to_owned();
             parents.push(path.clone());
             parents
         });
     }
 
-    fn walk_with_parents(&self, path: &PathBuf, parents: &[PathBuf]) {
-        let meta = fs::symlink_metadata(path.as_path());
-        if let Err(e) = meta {
-            error!("Failed to get path '{}' metadata: {}", path.display(), e);
-            return;
-        }
-        let meta = meta.unwrap();
+    fn walk_with_parents(&self, path: &PathBuf, meta: Option<fs::Metadata>, parents: &[PathBuf]) {
+        let meta = meta.or_else(|| match fs::symlink_metadata(path.as_path()) {
+            Ok(meta) => Some(meta),
+            Err(e) => {
+                error!("Failed to get path '{}' metadata: {}", path.display(), e);
+                None
+            }
+        });
+        let meta = match meta {
+            Some(meta) => meta,
+            _ => return,
+        };
         let file_type = meta.file_type();
         if file_type.is_dir() {
             self.walk_dir(path, parents);
@@ -283,6 +288,6 @@ impl Walker {
     }
 
     pub fn walk(&self, path: &PathBuf) {
-        self.walk_with_parents(path, &[]);
+        self.walk_with_parents(path, None, &[]);
     }
 }
