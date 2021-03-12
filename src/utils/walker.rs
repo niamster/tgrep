@@ -149,8 +149,14 @@ impl Walker {
         self.grep_many(&to_grep);
     }
 
-    fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
-        match Mapped::new(&entry) {
+    fn grep(
+        grep: Grep,
+        entry: Arc<PathBuf>,
+        len: usize,
+        matcher: Matcher,
+        display: Arc<dyn Display>,
+    ) {
+        match Mapped::new(&entry, len) {
             Ok(mapped) => {
                 if content_inspector::inspect(&*mapped).is_binary() {
                     debug!("Skipping binary file '{}'", entry.display());
@@ -175,7 +181,8 @@ impl Walker {
             let writer = Arc::new(BufferedWriter::new());
             let display = self.display.with_writer(writer.clone());
             writers.insert(entry.clone(), writer);
-            if *len == 0 {
+            let len = *len;
+            if len == 0 {
                 (self.grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
                 continue;
             }
@@ -184,11 +191,11 @@ impl Walker {
                     let grep = self.grep;
                     let wg = wg.clone();
                     tpool.spawn_ok(async move {
-                        Walker::grep(grep, entry, matcher, display);
+                        Walker::grep(grep, entry, len, matcher, display);
                         drop(wg);
                     });
                 }
-                None => Walker::grep(self.grep, entry, matcher, display),
+                None => Walker::grep(self.grep, entry, len, matcher, display),
             }
         }
         wg.wait();
@@ -249,13 +256,15 @@ impl Walker {
             error!("Failed to get path '{}' metadata: {}", path.display(), e);
             return;
         }
-        let file_type = meta.unwrap().file_type();
+        let meta = meta.unwrap();
+        let file_type = meta.file_type();
         if file_type.is_dir() {
             self.walk_dir(path, parents);
         } else if file_type.is_file() {
             Walker::grep(
                 self.grep,
                 Arc::new(path.clone()),
+                meta.len() as usize,
                 self.matcher.clone(),
                 self.display.clone(),
             );
