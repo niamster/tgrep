@@ -43,12 +43,17 @@ struct Cli {
     ignore_patterns: Vec<String>,
     #[structopt(
         short = "f",
-        default_value = "*",
         help = "File filter pattern",
         number_of_values = 1,
         name = "filter-pattern"
     )]
-    filter_pattern: Vec<String>,
+    filter_patterns: Vec<String>,
+    #[structopt(
+        short = "t",
+        help = "File type (extension) filter",
+        number_of_values = 1
+    )]
+    file_type_filters: Vec<String>,
     regexp: String,
     #[structopt(parse(from_os_str))]
     paths: Vec<PathBuf>,
@@ -100,7 +105,16 @@ fn main() -> Result<(), Error> {
         usize::MAX
     };
     let tpool = ThreadPool::new()?;
-    let file_filters = Filters::new(&args.filter_pattern)?;
+    let filter_patterns = {
+        let mut filter_patterns = args.filter_patterns.clone();
+        filter_patterns.extend(args.file_type_filters.iter().map(|e| format!("*.{}", e)));
+        filter_patterns.dedup();
+        if filter_patterns.is_empty() {
+            filter_patterns.push("*".to_string());
+        }
+        filter_patterns
+    };
+    let file_filters = Filters::new(&filter_patterns)?;
     let matcher = {
         // Some fun stuff:
         // 1. https://github.com/rust-lang/rust/issues/22340
