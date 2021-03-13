@@ -184,6 +184,10 @@ impl Walker {
                 (self.grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
                 continue;
             }
+            if entries.len() < 3 {
+                Walker::grep(self.grep, entry, len, matcher, display);
+                continue;
+            }
             match &self.tpool {
                 Some(tpool) => {
                     let grep = self.grep;
