@@ -17,10 +17,8 @@ use crate::utils::grep;
 use crate::utils::matcher::{Match, MatcherOptions};
 use crate::utils::patterns::Patterns;
 use crate::utils::stdin::Stdin;
-use crate::utils::walker::WalkerBuilder;
+use crate::utils::walker::{Walker, WalkerBuilder, GIT_DIR};
 use crate::utils::writer::StdoutWriter;
-
-const GIT_DIR: &str = ".git/";
 
 #[derive(Debug, StructOpt)]
 struct Cli {
@@ -172,7 +170,7 @@ fn main() -> Result<(), Error> {
         }
     };
     let ignore_patterns = {
-        let mut ignore_patterns = vec![GIT_DIR.to_owned()];
+        let mut ignore_patterns = vec![GIT_DIR.to_owned() + "/"];
         ignore_patterns.extend(args.ignore_patterns);
         ignore_patterns.dedup();
         ignore_patterns
@@ -192,6 +190,13 @@ fn main() -> Result<(), Error> {
         };
         let display = display(Arc::new(Box::new(path_format)));
         let ignore_patterns = Patterns::new(&fpath.as_path().to_str().unwrap(), &ignore_patterns);
+        let ignore_patterns =
+            if let Some(mut parent_patterns) = Walker::find_ignore_patterns_in_parents(&fpath) {
+                parent_patterns.extend(&ignore_patterns);
+                parent_patterns
+            } else {
+                ignore_patterns
+            };
         let grep = if args.path_only {
             if args.invert {
                 grep::grep_matches_all_lines

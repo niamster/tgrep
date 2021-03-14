@@ -21,6 +21,7 @@ use crate::utils::patterns::{Patterns, ToPatterns};
 use crate::utils::writer::BufferedWriter;
 
 static GIT_IGNORE: &str = ".gitignore";
+pub const GIT_DIR: &str = ".git";
 
 #[derive(Clone)]
 pub struct Walker {
@@ -93,23 +94,36 @@ impl Walker {
         skip
     }
 
+    fn process_gitignore(path: &PathBuf) -> Option<Patterns> {
+        let ifile = {
+            let mut ifile = path.clone();
+            ifile.push(GIT_IGNORE);
+            ifile
+        };
+        match ifile.to_patterns() {
+            Ok(ignore_patterns) => Some(ignore_patterns),
+            Err(e) => {
+                match e.downcast_ref::<io::Error>() {
+                    Some(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    _ => error!("Failed to process path '{}': {:?}", ifile.display(), e),
+                };
+                None
+            }
+        }
+    }
+
+    fn contains_git_dir(path: &PathBuf) -> bool {
+        let mut path = path.clone();
+        path.push(GIT_DIR);
+        path.exists()
+    }
+
     fn walk_dir(&self, path: &PathBuf, parents: &[PathBuf]) {
         let walker = {
             let mut walker = self.clone();
-            let ifile = {
-                let mut ifile = path.clone();
-                ifile.push(GIT_IGNORE);
-                ifile
-            };
-            match ifile.to_patterns() {
-                Ok(mut ignore_patterns) => {
-                    ignore_patterns.extend(&walker.ignore_patterns);
-                    walker.ignore_patterns = Arc::new(ignore_patterns);
-                }
-                Err(e) => match e.downcast_ref::<io::Error>() {
-                    Some(e) if e.kind() == io::ErrorKind::NotFound => {}
-                    _ => error!("Failed to process path '{}': {:?}", ifile.display(), e),
-                },
+            if let Some(mut ignore_patterns) = Self::process_gitignore(path) {
+                ignore_patterns.extend(&walker.ignore_patterns);
+                walker.ignore_patterns = Arc::new(ignore_patterns);
             }
             walker
         };
@@ -294,6 +308,31 @@ impl Walker {
         } else {
             warn!("Unhandled path '{}': {:?}", path.display(), file_type)
         }
+    }
+
+    pub fn find_ignore_patterns_in_parents(path: &PathBuf) -> Option<Patterns> {
+        if Self::contains_git_dir(&path) {
+            return None;
+        }
+        let mut patterns = Vec::new();
+        let mut path = path.clone();
+        while path.pop() {
+            if let Some(ignore_patterns) = Self::process_gitignore(&path) {
+                debug!("Found .gitignore in {}", path.display());
+                patterns.push(ignore_patterns);
+            }
+            if Self::contains_git_dir(&path) {
+                break;
+            }
+        }
+        if patterns.is_empty() {
+            return None;
+        }
+        let mut ignore_patterns = Patterns::default();
+        for pattern in patterns {
+            ignore_patterns.extend(&pattern);
+        }
+        Some(ignore_patterns)
     }
 
     pub fn walk(&self, path: &PathBuf) {
