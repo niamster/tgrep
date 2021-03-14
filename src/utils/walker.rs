@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     env,
     fs::{self, DirEntry},
+    io,
     path::PathBuf,
     sync::Arc,
 };
@@ -93,18 +94,22 @@ impl Walker {
     }
 
     fn walk_dir(&self, path: &PathBuf, parents: &[PathBuf]) {
-        let (ignore_files, entries): (Vec<_>, Vec<_>) = fs::read_dir(path)
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .partition(|entry| self.is_ignore_file(entry));
-
         let walker = {
             let mut walker = self.clone();
-            if !ignore_files.is_empty() {
-                let ignore_files: Vec<_> = ignore_files.iter().map(|entry| entry.path()).collect();
-                let mut ignore_patterns = ignore_files.to_patterns();
-                ignore_patterns.extend(&walker.ignore_patterns);
-                walker.ignore_patterns = Arc::new(ignore_patterns);
+            let ifile = {
+                let mut ifile = path.clone();
+                ifile.push(GIT_IGNORE);
+                ifile
+            };
+            match ifile.to_patterns() {
+                Ok(mut ignore_patterns) => {
+                    ignore_patterns.extend(&walker.ignore_patterns);
+                    walker.ignore_patterns = Arc::new(ignore_patterns);
+                }
+                Err(e) => match e.downcast_ref::<io::Error>() {
+                    Some(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    _ => error!("Failed to process path '{}': {:?}", ifile.display(), e),
+                },
             }
             walker
         };
@@ -112,8 +117,10 @@ impl Walker {
         let mut to_dive = BTreeMap::new();
         let mut to_grep = Vec::new();
 
-        let entries: Vec<_> = entries
-            .iter()
+        let entries: Vec<_> = fs::read_dir(path)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| !self.is_ignore_file(entry))
             .filter_map(|entry| match entry.metadata() {
                 Ok(meta) => Some((entry.path(), meta)),
                 Err(e) => {

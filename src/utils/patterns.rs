@@ -374,37 +374,20 @@ impl Patterns {
 }
 
 pub trait ToPatterns {
-    fn to_patterns(&self) -> Patterns;
+    fn to_patterns(&self) -> anyhow::Result<Patterns>;
 }
 
 impl ToPatterns for PathBuf {
-    fn to_patterns(&self) -> Patterns {
-        match self.lines() {
-            Ok(mut contents) => {
-                let mut lines = Vec::new();
-                while let Some(line) = contents.next() {
-                    lines.push(line.to_owned());
-                }
-                let root = self.as_path().parent().unwrap();
-                let root = root.canonicalize().unwrap();
-                let root = root.to_str().unwrap();
-                Patterns::new(root, &lines)
-            }
-            Err(e) => {
-                error!("Failed to read file with pattern: {}", e);
-                Default::default()
-            }
+    fn to_patterns(&self) -> anyhow::Result<Patterns> {
+        let mut contents = self.lines()?;
+        let mut lines = Vec::new();
+        while let Some(line) = contents.next() {
+            lines.push(line.to_owned());
         }
-    }
-}
-
-impl ToPatterns for Vec<PathBuf> {
-    fn to_patterns(&self) -> Patterns {
-        let mut patterns: Patterns = Default::default();
-        for path in self {
-            patterns.extend(&path.to_patterns());
-        }
-        patterns
+        let root = self.as_path().parent().unwrap();
+        let root = root.canonicalize().unwrap();
+        let root = root.to_str().unwrap();
+        Ok(Patterns::new(root, &lines))
     }
 }
 
