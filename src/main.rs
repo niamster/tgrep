@@ -32,6 +32,8 @@ struct Cli {
     #[structopt(short = "l", help = "Show only files with match")]
     path_only: bool,
     #[structopt(long = "no-colour", help = "Disable colours")]
+    no_colour: bool,
+    #[structopt(long = "no-color", help = "Disable colours")]
     no_color: bool,
     #[structopt(
         short = "e",
@@ -156,7 +158,7 @@ fn main() -> Result<(), Error> {
     };
     let display = {
         let path_only = args.path_only;
-        let no_color = args.no_color;
+        let no_color = args.no_color || args.no_colour;
         move |path_format: PathFormat| {
             DisplayTerminal::new(
                 width,
