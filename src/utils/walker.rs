@@ -3,7 +3,7 @@ use std::{
     env,
     fs::{self, DirEntry},
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -85,18 +85,18 @@ impl Walker {
         Some(GIT_IGNORE) == entry.file_name().to_str()
     }
 
-    fn is_excluded(&self, path: &PathBuf, is_dir: bool) -> bool {
+    fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
         let path = path.to_str().unwrap();
-        let skip = self.ignore_patterns.is_excluded(&path, is_dir);
+        let skip = self.ignore_patterns.is_excluded(path, is_dir);
         if skip {
             info!("Skipping {:?}", path);
         }
         skip
     }
 
-    fn process_gitignore(path: &PathBuf) -> Option<Patterns> {
+    fn process_gitignore(path: &Path) -> Option<Patterns> {
         let ifile = {
-            let mut ifile = path.clone();
+            let mut ifile = path.to_path_buf();
             ifile.push(GIT_IGNORE);
             ifile
         };
@@ -112,13 +112,13 @@ impl Walker {
         }
     }
 
-    fn contains_git_dir(path: &PathBuf) -> bool {
-        let mut path = path.clone();
+    fn contains_git_dir(path: &Path) -> bool {
+        let mut path = path.to_path_buf();
         path.push(GIT_DIR);
         path.exists()
     }
 
-    fn walk_dir(&self, path: &PathBuf, parents: &[PathBuf]) {
+    fn walk_dir(&self, path: &Path, parents: &[PathBuf]) {
         let walker = {
             let mut walker = self.clone();
             if let Some(mut ignore_patterns) = Self::process_gitignore(path) {
@@ -158,7 +158,7 @@ impl Walker {
 
         let parents = {
             let mut parents = parents.to_owned();
-            parents.push(path.clone());
+            parents.push(path.to_path_buf());
             parents
         };
         for (entry, meta) in to_dive {
@@ -227,7 +227,7 @@ impl Walker {
         }
     }
 
-    fn canonicalize(&self, orig: &PathBuf, resolved: &PathBuf) -> anyhow::Result<PathBuf> {
+    fn canonicalize(&self, orig: &Path, resolved: &Path) -> anyhow::Result<PathBuf> {
         let cwd = env::current_dir()?;
         let parent = orig
             .parent()
@@ -240,7 +240,7 @@ impl Walker {
         path
     }
 
-    fn process_symlink(&self, orig: &PathBuf, resolved: &PathBuf, parents: &[PathBuf]) {
+    fn process_symlink(&self, orig: &Path, resolved: &Path, parents: &[PathBuf]) {
         let path = self.canonicalize(orig, resolved);
         if let Err(e) = path {
             error!("Failed to canonicalize '{}': {}", resolved.display(), e);
@@ -273,8 +273,8 @@ impl Walker {
         });
     }
 
-    fn walk_with_parents(&self, path: &PathBuf, meta: Option<fs::Metadata>, parents: &[PathBuf]) {
-        let meta = meta.or_else(|| match fs::symlink_metadata(path.as_path()) {
+    fn walk_with_parents(&self, path: &Path, meta: Option<fs::Metadata>, parents: &[PathBuf]) {
+        let meta = meta.or_else(|| match fs::symlink_metadata(path) {
             Ok(meta) => Some(meta),
             Err(e) => {
                 error!("Failed to get path '{}' metadata: {}", path.display(), e);
@@ -291,7 +291,7 @@ impl Walker {
         } else if file_type.is_file() {
             Walker::grep(
                 self.grep.clone(),
-                Arc::new(path.clone()),
+                Arc::new(path.to_path_buf()),
                 meta.len() as usize,
                 self.matcher.clone(),
                 self.display.clone(),
@@ -301,7 +301,7 @@ impl Walker {
                 info!("Skipping symlink '{}'", path.display());
                 return;
             }
-            match fs::read_link(path.as_path()) {
+            match fs::read_link(path) {
                 Ok(resolved) => self.process_symlink(path, &resolved, parents),
                 Err(e) => error!("Failed to read link '{}': {}", path.display(), e),
             }
@@ -310,12 +310,12 @@ impl Walker {
         }
     }
 
-    pub fn find_ignore_patterns_in_parents(path: &PathBuf) -> Option<Patterns> {
-        if Self::contains_git_dir(&path) {
+    pub fn find_ignore_patterns_in_parents(path: &Path) -> Option<Patterns> {
+        if Self::contains_git_dir(path) {
             return None;
         }
         let mut patterns = Vec::new();
-        let mut path = path.clone();
+        let mut path = path.to_path_buf();
         while path.pop() {
             if let Some(ignore_patterns) = Self::process_gitignore(&path) {
                 debug!("Found .gitignore in {}", path.display());
@@ -335,7 +335,7 @@ impl Walker {
         Some(ignore_patterns)
     }
 
-    pub fn walk(&self, path: &PathBuf) {
+    pub fn walk(&self, path: &Path) {
         self.walk_with_parents(path, None, &[]);
     }
 }

@@ -1,4 +1,4 @@
-use std::{cmp, path::PathBuf, sync::Arc};
+use std::{cmp, path::Path, sync::Arc};
 
 use ansi_term::Colour;
 
@@ -37,12 +37,12 @@ impl<'a> DisplayContext<'a> {
 }
 
 pub trait Display: Send + Sync {
-    fn display(&self, path: &PathBuf, context: Option<DisplayContext>);
+    fn display(&self, path: &Path, context: Option<DisplayContext>);
     fn writer(&self) -> Arc<dyn Writer>;
     fn with_writer(&self, writer: Arc<dyn Writer>) -> Arc<dyn Display>;
 }
 
-pub type PathFormat = Arc<Box<dyn Fn(&PathBuf) -> String + Send + Sync>>;
+pub type PathFormat = Arc<Box<dyn Fn(&Path) -> String + Send + Sync>>;
 
 pub trait OutputFormat: Send + Sync {
     fn format(&self, width: usize, path: &str, context: Option<DisplayContext>) -> String;
@@ -77,7 +77,7 @@ impl<T> Display for DisplayTerminal<T>
 where
     T: OutputFormat + Clone + 'static,
 {
-    fn display(&self, path: &PathBuf, context: Option<DisplayContext>) {
+    fn display(&self, path: &Path, context: Option<DisplayContext>) {
         let formated = self
             .format
             .format(self.width, &(self.path_format)(path), context);

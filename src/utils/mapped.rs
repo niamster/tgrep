@@ -1,4 +1,9 @@
-use std::{fs, ops, path::PathBuf, rc::Rc, str};
+use std::{
+    fs, ops,
+    path::{Path, PathBuf},
+    rc::Rc,
+    str,
+};
 
 use log::debug;
 use memchr::memchr;
@@ -17,7 +22,7 @@ pub struct Mapped {
 }
 
 impl Mapped {
-    pub fn new(path: &PathBuf, len: usize) -> anyhow::Result<Self> {
+    pub fn new(path: &Path, len: usize) -> anyhow::Result<Self> {
         let file = fs::File::open(path)?;
         let mmap = unsafe { MmapOptions::new().len(len).map(&file)? };
         Ok(Mapped {

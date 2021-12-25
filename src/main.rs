@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{self, PathBuf},
+    path::{self, Path, PathBuf},
     sync::Arc,
 };
 
@@ -199,8 +199,7 @@ fn main() -> Result<(), Error> {
         let fpath = path.canonicalize().unwrap();
         let path_format = {
             let fpath = fpath.clone();
-            move |entry: &PathBuf| -> String {
-                let entry = entry.as_path();
+            move |entry: &Path| -> String {
                 let entry = entry.strip_prefix(&fpath).unwrap();
                 prefix.clone() + entry.to_str().unwrap()
             }
@@ -235,7 +234,7 @@ fn main() -> Result<(), Error> {
         walker.walk(&fpath);
     }
     if stdin.is_readable() {
-        let path_format = |entry: &PathBuf| -> String { entry.to_str().unwrap().to_owned() };
+        let path_format = |entry: &Path| -> String { entry.to_str().unwrap().to_owned() };
         let display = display(Arc::new(Box::new(path_format)));
         grep::grep()(
             Arc::new(stdin),
