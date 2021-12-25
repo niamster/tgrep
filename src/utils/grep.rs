@@ -15,7 +15,7 @@ type OnEnd = Box<dyn Fn(usize, usize)>;
 
 fn generic_grep(reader: Arc<dyn LinesReader>, matcher: Matcher, on_match: OnMatch, on_end: OnEnd) {
     if let Ok(map) = reader.map() {
-        if matcher(&map, MatcherOptions::FUZZY).is_none() {
+        if matcher(&map, MatcherOptions::Fuzzy).is_none() {
             on_end(0, 0);
             return;
         }
@@ -26,7 +26,7 @@ fn generic_grep(reader: Arc<dyn LinesReader>, matcher: Matcher, on_match: OnMatc
         Ok(mut lines) => {
             while let Some(line) = lines.next() {
                 total += 1;
-                if let Some(needle) = matcher(&line, MatcherOptions::EXACT(usize::MAX)) {
+                if let Some(needle) = matcher(&line, MatcherOptions::Exact(usize::MAX)) {
                     matches += 1;
                     if on_match(DisplayContext::new(total, &line, needle)) {
                         break;
@@ -65,7 +65,7 @@ fn _grep_with_context(
     after: usize,
 ) {
     if let Ok(map) = reader.map() {
-        if matcher(&map, MatcherOptions::FUZZY).is_none() {
+        if matcher(&map, MatcherOptions::Fuzzy).is_none() {
             return;
         }
     }
@@ -86,7 +86,7 @@ fn _grep_with_context(
                     pcount -= 1;
                     print_sep = pcount == 0;
                 }
-                if let Some(needle) = matcher(&line, MatcherOptions::EXACT(usize::MAX)) {
+                if let Some(needle) = matcher(&line, MatcherOptions::Exact(usize::MAX)) {
                     if print_sep {
                         display.writer().write("--");
                         print_sep = false;

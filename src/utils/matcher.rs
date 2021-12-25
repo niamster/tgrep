@@ -7,8 +7,8 @@ pub struct Match {
 }
 
 pub enum MatcherOptions {
-    FUZZY,
-    EXACT(usize),
+    Fuzzy,
+    Exact(usize),
 }
 
 pub type Matcher = Arc<Box<dyn Fn(&str, MatcherOptions) -> Option<Vec<Match>> + Send + Sync>>;

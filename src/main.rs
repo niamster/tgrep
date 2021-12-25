@@ -142,7 +142,7 @@ fn main() -> Result<(), Error> {
                 None
             };
             match options {
-                MatcherOptions::FUZZY => {
+                MatcherOptions::Fuzzy => {
                     let result = if let Some(pos) = regexp.shortest_match(line) {
                         Some(vec![Match::new(0, pos)])
                     } else {
@@ -150,7 +150,7 @@ fn main() -> Result<(), Error> {
                     };
                     result.xor(option)
                 }
-                MatcherOptions::EXACT(max) => {
+                MatcherOptions::Exact(max) => {
                     let mut matches = vec![];
                     for (i, m) in regexp.find_iter(line).enumerate() {
                         matches.push(Match::new(m.start(), m.end()));
