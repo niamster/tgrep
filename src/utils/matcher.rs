@@ -36,11 +36,11 @@ impl From<std::ops::Range<usize>> for Match {
     }
 }
 
-impl Into<std::ops::Range<usize>> for Match {
-    fn into(self) -> std::ops::Range<usize> {
+impl From<Match> for std::ops::Range<usize> {
+    fn from(m: Match) -> Self {
         std::ops::Range {
-            start: self.start(),
-            end: self.end(),
+            start: m.start,
+            end: m.end,
         }
     }
 }
