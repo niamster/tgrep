@@ -206,7 +206,7 @@ fn main() -> Result<(), Error> {
             }
         };
         let display = display(Arc::new(Box::new(path_format)));
-        let ignore_patterns = Patterns::new(&fpath.as_path().to_str().unwrap(), &ignore_patterns);
+        let ignore_patterns = Patterns::new(fpath.as_path().to_str().unwrap(), &ignore_patterns);
         let ignore_patterns =
             if let Some(mut parent_patterns) = Walker::find_ignore_patterns_in_parents(&fpath) {
                 parent_patterns.extend(&ignore_patterns);

@@ -136,7 +136,7 @@ impl Pattern {
             // `/foo`
             PatternType::Exact(capture)
         } else {
-            PatternType::Glob(glob::Pattern::new(&pattern)?)
+            PatternType::Glob(glob::Pattern::new(pattern)?)
         };
         Ok(Pattern {
             pattern: Arc::new(transformed),
