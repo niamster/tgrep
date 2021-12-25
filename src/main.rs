@@ -230,6 +230,7 @@ fn main() -> Result<(), Error> {
                 .ignore_patterns(ignore_patterns)
                 .file_filters(file_filters.clone())
                 .ignore_symlinks(args.ignore_symlinks)
+                .print_file_separator(args.before.is_some() || args.after.is_some())
                 .build();
         walker.walk(&fpath);
     }

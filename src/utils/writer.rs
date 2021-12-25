@@ -49,6 +49,10 @@ impl BufferedWriter {
             writer.write(line);
         }
     }
+
+    pub fn has_some(&self) -> bool {
+        self.lines.lock().unwrap().borrow().len() > 0
+    }
 }
 
 impl Writer for BufferedWriter {

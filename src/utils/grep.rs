@@ -85,7 +85,6 @@ fn _grep_with_context(
                     pcount -= 1;
                 }
                 if let Some(needle) = matcher(line, MatcherOptions::Exact(usize::MAX)) {
-                    display.separator();
                     for i in 0..cmp::min(before, lqueue.len()) {
                         display.display(
                             &path,

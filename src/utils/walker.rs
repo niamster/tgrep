@@ -4,6 +4,8 @@ use std::{
     fs::{self, DirEntry},
     io,
     path::{Path, PathBuf},
+    rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
 };
 
@@ -32,6 +34,8 @@ pub struct Walker {
     matcher: Matcher,
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
+    print_file_separator: bool,
+    file_separator_printed: Rc<AtomicBool>,
 }
 
 pub struct WalkerBuilder(Walker);
@@ -63,6 +67,11 @@ impl WalkerBuilder {
         self
     }
 
+    pub fn print_file_separator(mut self, print_file_separator: bool) -> WalkerBuilder {
+        self.0.print_file_separator = print_file_separator;
+        self
+    }
+
     pub fn build(self) -> Walker {
         self.0
     }
@@ -78,6 +87,8 @@ impl Walker {
             matcher,
             ignore_symlinks: false,
             display,
+            print_file_separator: false,
+            file_separator_printed: Default::default(),
         }
     }
 
@@ -223,6 +234,12 @@ impl Walker {
         }
         wg.wait();
         for (_, w) in writers {
+            if self.print_file_separator
+                && w.has_some()
+                && self.file_separator_printed.swap(true, Ordering::Relaxed)
+            {
+                self.display.separator();
+            }
             w.flush(&writer);
         }
     }
