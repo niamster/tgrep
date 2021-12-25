@@ -1,5 +1,5 @@
 use std::cmp;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use log::error;
@@ -28,7 +28,7 @@ fn generic_grep(reader: Arc<dyn LinesReader>, matcher: Matcher, on_match: OnMatc
                 total += 1;
                 if let Some(needle) = matcher(line, MatcherOptions::Exact(usize::MAX)) {
                     matches += 1;
-                    if on_match(DisplayContext::new(total, line, needle)) {
+                    if on_match(DisplayContext::new(total, line.to_string(), needle)) {
                         break;
                     }
                 }
@@ -70,39 +70,43 @@ fn _grep_with_context(
         }
     }
     let path = reader.path().clone();
-    let mut lqueue: VecDeque<String> = VecDeque::with_capacity(before + after + 1);
+    let mut lqueue: VecDeque<String> = VecDeque::with_capacity(before + 1);
     let mut lno = 0;
     let mut pcount: isize = 0;
+    let mut output = BTreeMap::new();
     match reader.lines() {
         Ok(mut lines) => {
             while let Some(line) = lines.next() {
                 lno += 1;
+                let needle = matcher(line, MatcherOptions::Exact(usize::MAX));
+
                 if pcount > 0 {
-                    display.display(
-                        &path,
-                        Some(DisplayContext::with_lno_separator(lno, line, vec![], "+")),
-                    );
+                    output.entry(lno).or_insert_with(|| {
+                        DisplayContext::with_lno_separator(lno, line.to_owned(), vec![], "-")
+                    });
                     pcount -= 1;
                 }
-                if let Some(needle) = matcher(line, MatcherOptions::Exact(usize::MAX)) {
+                if let Some(needle) = needle {
                     for i in 0..cmp::min(before, lqueue.len()) {
-                        display.display(
-                            &path,
-                            Some(DisplayContext::with_lno_separator(
+                        output.entry(lno - i - 1).or_insert_with(|| {
+                            DisplayContext::with_lno_separator(
                                 lno - i - 1,
-                                lqueue.get(i).unwrap(),
+                                lqueue.pop_front().unwrap(),
                                 vec![],
                                 "-",
-                            )),
-                        );
+                            )
+                        });
                     }
-                    display.display(&path, Some(DisplayContext::new(lno, line, needle)));
+                    output.insert(lno, DisplayContext::new(lno, line.to_owned(), needle));
                     pcount = after as isize;
                 }
                 lqueue.push_back(line.to_string());
                 if lqueue.len() == before + 1 {
                     lqueue.pop_front();
                 }
+            }
+            for (_, context) in output {
+                display.display(&path, Some(context));
             }
         }
         Err(e) => error!("Failed to read '{}': {}", reader.path().display(), e),

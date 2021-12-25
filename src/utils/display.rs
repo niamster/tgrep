@@ -9,13 +9,13 @@ type Range = std::ops::Range<usize>;
 
 pub struct DisplayContext<'a> {
     lno: usize,
-    line: &'a str,
+    line: String,
     needle: Vec<Match>,
     lno_sep: &'a str,
 }
 
 impl<'a> DisplayContext<'a> {
-    pub fn new(lno: usize, line: &'a str, needle: Vec<Match>) -> Self {
+    pub fn new(lno: usize, line: String, needle: Vec<Match>) -> Self {
         DisplayContext {
             lno,
             line,
@@ -26,7 +26,7 @@ impl<'a> DisplayContext<'a> {
 
     pub fn with_lno_separator(
         lno: usize,
-        line: &'a str,
+        line: String,
         needle: Vec<Match>,
         lno_sep: &'a str,
     ) -> Self {
@@ -243,7 +243,7 @@ impl OutputFormat for Format {
                         prefix,
                         self.rich_format(
                             width - prefix.len(),
-                            ctx.line,
+                            &ctx.line,
                             ctx.needle.into_iter().map(Into::into).collect(),
                             *colour,
                         )
@@ -293,11 +293,7 @@ mod tests {
                 Format::Rich { colour: false }.format(
                     width,
                     "/",
-                    Some(DisplayContext::new(
-                        0,
-                        &"-".repeat(len),
-                        vec![needle.into()]
-                    ))
+                    Some(DisplayContext::new(0, "-".repeat(len), vec![needle.into()]))
                 ),
             );
             assert_eq!(
