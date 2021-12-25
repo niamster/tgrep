@@ -73,7 +73,6 @@ fn _grep_with_context(
     let mut lqueue: VecDeque<String> = VecDeque::with_capacity(before + after + 1);
     let mut lno = 0;
     let mut pcount: isize = 0;
-    let mut print_sep = false;
     match reader.lines() {
         Ok(mut lines) => {
             while let Some(line) = lines.next() {
@@ -84,13 +83,9 @@ fn _grep_with_context(
                         Some(DisplayContext::with_lno_separator(lno, line, vec![], "+")),
                     );
                     pcount -= 1;
-                    print_sep = pcount == 0;
                 }
                 if let Some(needle) = matcher(line, MatcherOptions::Exact(usize::MAX)) {
-                    if print_sep {
-                        display.writer().write("--");
-                        print_sep = false;
-                    }
+                    display.writer().write("--");
                     for i in 0..cmp::min(before, lqueue.len()) {
                         display.display(
                             &path,
