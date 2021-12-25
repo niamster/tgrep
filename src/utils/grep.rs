@@ -106,7 +106,7 @@ fn _grep_with_context(
                     pcount = after as isize;
                 }
                 lqueue.push_back(line.to_string());
-                if lqueue.len() == before + after + 1 {
+                if lqueue.len() == before + 1 {
                     lqueue.pop_front();
                 }
             }
