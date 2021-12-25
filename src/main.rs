@@ -143,11 +143,9 @@ fn main() -> Result<(), Error> {
             };
             match options {
                 MatcherOptions::Fuzzy => {
-                    let result = if let Some(pos) = regexp.shortest_match(line) {
-                        Some(vec![Match::new(0, pos)])
-                    } else {
-                        None
-                    };
+                    let result = regexp
+                        .shortest_match(line)
+                        .map(|pos| vec![Match::new(0, pos)]);
                     result.xor(option)
                 }
                 MatcherOptions::Exact(max) => {

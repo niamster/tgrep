@@ -151,23 +151,23 @@ impl Pattern {
 
     fn re(regex: &str, pattern: &str) -> Option<String> {
         let regex = Self::re_prepare(regex);
-        if let Some(capture) = Regex::new(&regex).unwrap().captures(pattern) {
-            Some(capture.get(1).unwrap().as_str().to_string())
-        } else {
-            None
-        }
+        Regex::new(&regex)
+            .unwrap()
+            .captures(pattern)
+            .map(|capture| capture.get(1).unwrap().as_str().to_string())
     }
 
     fn re2(regex: &str, pattern: &str) -> Option<(String, String)> {
         let regex = Self::re_prepare(regex);
-        if let Some(capture) = Regex::new(&regex).unwrap().captures(pattern) {
-            Some((
-                capture.get(1).unwrap().as_str().to_string(),
-                capture.get(2).unwrap().as_str().to_string(),
-            ))
-        } else {
-            None
-        }
+        Regex::new(&regex)
+            .unwrap()
+            .captures(pattern)
+            .map(|capture| {
+                (
+                    capture.get(1).unwrap().as_str().to_string(),
+                    capture.get(2).unwrap().as_str().to_string(),
+                )
+            })
     }
 
     fn matches(&self, path: &str) -> bool {
