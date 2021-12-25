@@ -36,6 +36,18 @@ struct Cli {
     #[structopt(long = "no-color", help = "Disable colours")]
     no_color: bool,
     #[structopt(
+        short = "A",
+        long = "after-context",
+        help = "Number of lines to print after each match"
+    )]
+    after: Option<usize>,
+    #[structopt(
+        short = "B",
+        long = "before-context",
+        help = "Number of lines to print before each match"
+    )]
+    before: Option<usize>,
+    #[structopt(
         short = "e",
         long = "exclude",
         number_of_values = 1,
@@ -206,12 +218,14 @@ fn main() -> Result<(), Error> {
             };
         let grep = if args.path_only {
             if args.invert {
-                grep::grep_matches_all_lines
+                grep::grep_matches_all_lines()
             } else {
-                grep::grep_matches_once
+                grep::grep_matches_once()
             }
+        } else if args.before.is_some() || args.after.is_some() {
+            grep::grep_with_context(args.before.unwrap_or(0), args.after.unwrap_or(0))
         } else {
-            grep::grep
+            grep::grep()
         };
         let walker =
             WalkerBuilder::new(grep, Arc::new(Box::new(matcher.clone())), Arc::new(display))
@@ -225,7 +239,7 @@ fn main() -> Result<(), Error> {
     if stdin.is_readable() {
         let path_format = |entry: &PathBuf| -> String { entry.to_str().unwrap().to_owned() };
         let display = display(Arc::new(Box::new(path_format)));
-        grep::grep(
+        grep::grep()(
             Arc::new(stdin),
             Arc::new(Box::new(matcher)),
             Arc::new(display),

@@ -206,19 +206,19 @@ impl Walker {
                 continue;
             }
             if entries.len() < 3 {
-                Walker::grep(self.grep, entry, len, matcher, display);
+                Walker::grep(self.grep.clone(), entry, len, matcher, display);
                 continue;
             }
             match &self.tpool {
                 Some(tpool) => {
-                    let grep = self.grep;
+                    let grep = self.grep.clone();
                     let wg = wg.clone();
                     tpool.spawn_ok(async move {
                         Walker::grep(grep, entry, len, matcher, display);
                         drop(wg);
                     });
                 }
-                None => Walker::grep(self.grep, entry, len, matcher, display),
+                None => Walker::grep(self.grep.clone(), entry, len, matcher, display),
             }
         }
         wg.wait();
@@ -290,7 +290,7 @@ impl Walker {
             self.walk_dir(path, parents);
         } else if file_type.is_file() {
             Walker::grep(
-                self.grep,
+                self.grep.clone(),
                 Arc::new(path.clone()),
                 meta.len() as usize,
                 self.matcher.clone(),

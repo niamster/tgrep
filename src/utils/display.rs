@@ -11,11 +11,28 @@ pub struct DisplayContext<'a> {
     lno: usize,
     line: &'a str,
     needle: Vec<Match>,
+    lno_sep: &'a str,
 }
 
 impl<'a> DisplayContext<'a> {
     pub fn new(lno: usize, line: &'a str, needle: Vec<Match>) -> Self {
-        DisplayContext { lno, line, needle }
+        DisplayContext {
+            lno,
+            line,
+            needle,
+            lno_sep: ":",
+        }
+    }
+
+    pub fn with_lno_separator(
+        lno: usize,
+        line: &'a str,
+        needle: Vec<Match>,
+        lno_sep: &'a str,
+    ) -> Self {
+        let mut ctx = Self::new(lno, line, needle);
+        ctx.lno_sep = lno_sep;
+        ctx
     }
 }
 
@@ -91,20 +108,12 @@ impl Format {
     fn rich_format_many(
         &self,
         _width: usize,
-        path: &str,
-        lno: usize,
         line: &str,
         needles: Vec<Range>,
         colour: bool,
     ) -> String {
         assert!(needles.len() >= 2);
-        let lno = lno.to_string();
         let mut formatted = Vec::with_capacity(2 * needles.len() + 2);
-        formatted.push(if colour {
-            format!("{}:{} ", Colour::Blue.paint(path), Colour::Green.paint(lno))
-        } else {
-            format!("{}:{} ", path, lno)
-        });
         for (idx, needle) in needles.iter().enumerate() {
             assert!(needle.end >= needle.start);
             assert!(needle.end <= line.len());
@@ -130,27 +139,11 @@ impl Format {
         formatted.join("")
     }
 
-    fn rich_format_one(
-        &self,
-        width: usize,
-        path: &str,
-        lno: usize,
-        line: &str,
-        needle: &Range,
-        colour: bool,
-    ) -> String {
+    fn rich_format_one(&self, width: usize, line: &str, needle: &Range, colour: bool) -> String {
         assert!(needle.end >= needle.start);
         assert!(needle.end <= line.len());
-        let lno = lno.to_string();
         let needle_len = needle.end - needle.start;
-        let preambule_len = path.len() + lno.len() + 2; // +2 for `: ` in format
-        let width = cmp::max(width, preambule_len + needle_len);
-        let width = width - preambule_len;
-        let width = if width < needle_len {
-            needle_len
-        } else {
-            width
-        };
+        let width = cmp::max(width, needle_len);
         let (left_margin, right_margin) = if width == needle_len {
             (usize::MAX, usize::MAX)
         } else if needle.start < width / 2 {
@@ -191,9 +184,7 @@ impl Format {
         let after = &line[needle.end..end];
         if colour {
             format!(
-                "{}:{} {}{}{}{}{}",
-                Colour::Blue.paint(path),
-                Colour::Green.paint(lno),
+                "{}{}{}{}{}",
                 Colour::Purple.paint(prefix),
                 before,
                 Colour::Red.paint(what),
@@ -201,26 +192,17 @@ impl Format {
                 Colour::Purple.paint(suffix),
             )
         } else {
-            format!(
-                "{}:{} {}{}{}{}{}",
-                path, lno, prefix, before, what, after, suffix,
-            )
+            format!("{}{}{}{}{}", prefix, before, what, after, suffix)
         }
     }
 
-    fn rich_format(
-        &self,
-        width: usize,
-        path: &str,
-        lno: usize,
-        line: &str,
-        needles: Vec<Range>,
-        colour: bool,
-    ) -> String {
-        if needles.len() == 1 {
-            self.rich_format_one(width, path, lno, line, &needles[0], colour)
+    fn rich_format(&self, width: usize, line: &str, needles: Vec<Range>, colour: bool) -> String {
+        if needles.is_empty() {
+            line.to_string()
+        } else if needles.len() == 1 {
+            self.rich_format_one(width, line, &needles[0], colour)
         } else {
-            self.rich_format_many(width, path, lno, line, needles, colour)
+            self.rich_format_many(width, line, needles, colour)
         }
     }
 
@@ -237,14 +219,29 @@ impl OutputFormat for Format {
     fn format(&self, width: usize, path: &str, context: Option<DisplayContext>) -> String {
         match self {
             Format::Rich { colour } => match context {
-                Some(ctx) => self.rich_format(
-                    width,
-                    path,
-                    ctx.lno,
-                    ctx.line,
-                    ctx.needle.into_iter().map(Into::into).collect(),
-                    *colour,
-                ),
+                Some(ctx) => {
+                    let prefix = if *colour {
+                        let lno = ctx.lno.to_string();
+                        format!(
+                            "{}{}{} ",
+                            Colour::Blue.paint(path),
+                            Colour::Cyan.paint(ctx.lno_sep),
+                            Colour::Green.paint(lno)
+                        )
+                    } else {
+                        format!("{}{}{} ", path, ctx.lno_sep, ctx.lno)
+                    };
+                    format!(
+                        "{}{}",
+                        prefix,
+                        self.rich_format(
+                            width - prefix.len(),
+                            ctx.line,
+                            ctx.needle.into_iter().map(Into::into).collect(),
+                            *colour,
+                        )
+                    )
+                }
                 None => self.format_path(path, *colour),
             },
             Format::PathOnly { colour } => self.format_path(path, *colour),
