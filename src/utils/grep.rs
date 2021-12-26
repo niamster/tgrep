@@ -13,12 +13,17 @@ pub type Grep = Arc<Box<dyn Fn(Arc<dyn LinesReader>, Matcher, Arc<dyn Display>) 
 type OnMatch = Box<dyn Fn(DisplayContext) -> bool>;
 type OnEnd = Box<dyn Fn(usize, usize)>;
 
+fn fuzzy_grep(reader: &Arc<dyn LinesReader>, matcher: &Matcher) -> Option<()> {
+    reader
+        .map()
+        .ok()
+        .and_then(|map| matcher(map, MatcherOptions::Fuzzy).and(Some(())))
+}
+
 fn generic_grep(reader: Arc<dyn LinesReader>, matcher: Matcher, on_match: OnMatch, on_end: OnEnd) {
-    if let Ok(map) = reader.map() {
-        if matcher(map, MatcherOptions::Fuzzy).is_none() {
-            on_end(0, 0);
-            return;
-        }
+    if fuzzy_grep(&reader, &matcher).is_none() {
+        on_end(0, 0);
+        return;
     }
     let mut matches = 0;
     let mut total = 0;
@@ -64,10 +69,8 @@ fn _grep_with_context(
     before: usize,
     after: usize,
 ) {
-    if let Ok(map) = reader.map() {
-        if matcher(map, MatcherOptions::Fuzzy).is_none() {
-            return;
-        }
+    if fuzzy_grep(&reader, &matcher).is_none() {
+        return;
     }
     let path = reader.path().clone();
     let mut lqueue: VecDeque<String> = VecDeque::with_capacity(before + 1);
