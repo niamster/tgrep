@@ -38,7 +38,8 @@ impl<'a> DisplayContext<'a> {
 
 pub trait Display: Send + Sync {
     fn display(&self, path: &Path, context: Option<DisplayContext>);
-    fn separator(&self);
+    fn file_separator(&self);
+    fn match_separator(&self);
     fn writer(&self) -> Arc<dyn Writer>;
     fn with_writer(&self, writer: Arc<dyn Writer>) -> Arc<dyn Display>;
 }
@@ -47,7 +48,8 @@ pub type PathFormat = Arc<Box<dyn Fn(&Path) -> String + Send + Sync>>;
 
 pub trait OutputFormat: Send + Sync {
     fn format(&self, width: usize, path: &str, context: Option<DisplayContext>) -> String;
-    fn separator(&self) -> String;
+    fn file_separator(&self) -> String;
+    fn match_separator(&self) -> String;
 }
 
 #[derive(Clone)]
@@ -86,8 +88,13 @@ where
         self.writer.write(&formated);
     }
 
-    fn separator(&self) {
-        let separator = self.format.separator();
+    fn file_separator(&self) {
+        let separator = self.format.file_separator();
+        self.writer.write(&separator);
+    }
+
+    fn match_separator(&self) {
+        let separator = self.format.match_separator();
         self.writer.write(&separator);
     }
 
@@ -255,7 +262,7 @@ impl OutputFormat for Format {
         }
     }
 
-    fn separator(&self) -> String {
+    fn file_separator(&self) -> String {
         let colour = match self {
             Format::Rich { colour } => *colour,
             _ => false,
@@ -264,6 +271,18 @@ impl OutputFormat for Format {
             Colour::Fixed(203).paint("--").to_string()
         } else {
             "--".to_string()
+        }
+    }
+
+    fn match_separator(&self) -> String {
+        let colour = match self {
+            Format::Rich { colour } => *colour,
+            _ => false,
+        };
+        if colour {
+            Colour::Fixed(120).paint("..").to_string()
+        } else {
+            "..".to_string()
         }
     }
 }

@@ -238,7 +238,7 @@ impl Walker {
                 && w.has_some()
                 && self.file_separator_printed.swap(true, Ordering::Relaxed)
             {
-                self.display.separator();
+                self.display.file_separator();
             }
             w.flush(&writer);
         }

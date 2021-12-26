@@ -108,7 +108,12 @@ fn _grep_with_context(
                     lqueue.pop_front();
                 }
             }
-            for (_, context) in output {
+            let mut plno = 0;
+            for (lno, context) in output {
+                if plno > 0 && lno - plno > 1 {
+                    display.match_separator();
+                }
+                plno = lno;
                 display.display(&path, Some(context));
             }
         }
