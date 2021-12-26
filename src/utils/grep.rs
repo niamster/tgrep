@@ -165,3 +165,25 @@ pub fn grep_matches_all_lines() -> Grep {
         },
     ))
 }
+
+pub fn grep_count() -> Grep {
+    Arc::new(Box::new(
+        move |reader: Arc<dyn LinesReader>, matcher: Matcher, display: Arc<dyn Display>| {
+            let path = reader.path().clone();
+            let display = display.clone();
+            generic_grep(
+                reader,
+                matcher,
+                Box::new(move |_| false),
+                Box::new(move |_, matches| {
+                    if matches > 0 {
+                        display.display(
+                            &path,
+                            Some(DisplayContext::new(matches, "".to_string(), vec![])),
+                        );
+                    }
+                }),
+            );
+        },
+    ))
+}

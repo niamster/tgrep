@@ -31,6 +31,12 @@ struct Cli {
     invert: bool,
     #[structopt(short = "l", help = "Show only files with match")]
     path_only: bool,
+    #[structopt(
+        short = "c",
+        long = "count",
+        help = "Count the number of the occurences"
+    )]
+    count: bool,
     #[structopt(long = "no-colour", help = "Disable colours")]
     no_colour: bool,
     #[structopt(long = "no-color", help = "Disable colours")]
@@ -213,7 +219,12 @@ fn main() -> Result<(), Error> {
             } else {
                 ignore_patterns
             };
-        let grep = if args.path_only {
+        let grep = if args.count {
+            if args.invert {
+                anyhow::bail!("Inverted count is not supported!");
+            }
+            grep::grep_count()
+        } else if args.path_only {
             if args.invert {
                 grep::grep_matches_all_lines()
             } else {
