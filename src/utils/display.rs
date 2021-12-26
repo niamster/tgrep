@@ -227,6 +227,18 @@ impl Format {
             path.to_string()
         }
     }
+
+    fn separator(&self, separator: &str, code: u8) -> String {
+        let colour = match self {
+            Format::Rich { colour } => *colour,
+            _ => false,
+        };
+        if colour {
+            Colour::Fixed(code).paint(separator).to_string()
+        } else {
+            separator.to_string()
+        }
+    }
 }
 
 impl OutputFormat for Format {
@@ -263,27 +275,11 @@ impl OutputFormat for Format {
     }
 
     fn file_separator(&self) -> String {
-        let colour = match self {
-            Format::Rich { colour } => *colour,
-            _ => false,
-        };
-        if colour {
-            Colour::Fixed(203).paint("--").to_string()
-        } else {
-            "--".to_string()
-        }
+        self.separator("--", 203)
     }
 
     fn match_separator(&self) -> String {
-        let colour = match self {
-            Format::Rich { colour } => *colour,
-            _ => false,
-        };
-        if colour {
-            Colour::Fixed(120).paint("..").to_string()
-        } else {
-            "..".to_string()
-        }
+        self.separator("..", 120)
     }
 }
 
