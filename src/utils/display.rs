@@ -118,6 +118,7 @@ pub enum Format {
         colour: bool,
         match_only: bool,
         no_path: bool,
+        no_lno: bool,
     },
     PathOnly {
         colour: bool,
@@ -287,9 +288,9 @@ impl OutputFormat for Format {
                 colour,
                 match_only,
                 no_path,
+                no_lno,
             } => match context {
                 Some(ctx) => {
-                    let lno = ctx.lno.to_string();
                     let prefix = if *no_path {
                         "".into()
                     } else {
@@ -304,15 +305,25 @@ impl OutputFormat for Format {
                             format!("{}{}", path, ctx.lno_sep)
                         }
                     };
-                    let prefix = if *colour {
-                        format!(
-                            "{}{}{} ",
-                            prefix,
-                            Colour::Green.paint(lno),
-                            Colour::Cyan.paint(ctx.lno_sep)
-                        )
+                    let prefix = if *no_lno {
+                        prefix
                     } else {
-                        format!("{}{}{} ", prefix, ctx.lno, ctx.lno_sep)
+                        let lno = ctx.lno.to_string();
+                        if *colour {
+                            format!(
+                                "{}{}{}",
+                                prefix,
+                                Colour::Green.paint(lno),
+                                Colour::Cyan.paint(ctx.lno_sep)
+                            )
+                        } else {
+                            format!("{}{}{}", prefix, ctx.lno, ctx.lno_sep)
+                        }
+                    };
+                    let prefix = if prefix.is_empty() {
+                        prefix
+                    } else {
+                        format!("{} ", prefix)
                     };
                     let needles = ctx.needle.into_iter().map(Into::into).collect();
                     if *match_only {

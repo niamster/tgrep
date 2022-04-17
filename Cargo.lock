@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "tgrep"
-version = "1.6.3"
+version = "1.6.4"
 dependencies = [
  "ansi_term",
  "anyhow",
