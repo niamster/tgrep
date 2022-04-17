@@ -114,8 +114,14 @@ where
 
 #[derive(Clone)]
 pub enum Format {
-    Rich { colour: bool, match_only: bool },
-    PathOnly { colour: bool },
+    Rich {
+        colour: bool,
+        match_only: bool,
+        no_path: bool,
+    },
+    PathOnly {
+        colour: bool,
+    },
 }
 
 impl Format {
@@ -277,18 +283,36 @@ impl Format {
 impl OutputFormat for Format {
     fn format(&self, width: usize, path: &str, context: Option<DisplayContext>) -> String {
         match self {
-            Format::Rich { colour, match_only } => match context {
+            Format::Rich {
+                colour,
+                match_only,
+                no_path,
+            } => match context {
                 Some(ctx) => {
+                    let lno = ctx.lno.to_string();
+                    let prefix = if *no_path {
+                        "".into()
+                    } else {
+                        #[allow(clippy::collapsible_else_if)]
+                        if *colour {
+                            format!(
+                                "{}{}",
+                                Colour::Blue.paint(path),
+                                Colour::Cyan.paint(ctx.lno_sep)
+                            )
+                        } else {
+                            format!("{}{}", path, ctx.lno_sep)
+                        }
+                    };
                     let prefix = if *colour {
-                        let lno = ctx.lno.to_string();
                         format!(
                             "{}{}{} ",
-                            Colour::Blue.paint(path),
-                            Colour::Cyan.paint(ctx.lno_sep),
-                            Colour::Green.paint(lno)
+                            prefix,
+                            Colour::Green.paint(lno),
+                            Colour::Cyan.paint(ctx.lno_sep)
                         )
                     } else {
-                        format!("{}{}{} ", path, ctx.lno_sep, ctx.lno)
+                        format!("{}{}{} ", prefix, ctx.lno, ctx.lno_sep)
                     };
                     let needles = ctx.needle.into_iter().map(Into::into).collect();
                     if *match_only {
