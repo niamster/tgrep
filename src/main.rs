@@ -32,6 +32,11 @@ struct Cli {
     #[structopt(short = "l", help = "Show only files with match")]
     path_only: bool,
     #[structopt(
+        short = "o",
+        help = "Prints only the matching parts of the line (each matching part is printed on a separate output line)"
+    )]
+    match_only: bool,
+    #[structopt(
         short = "c",
         long = "count",
         help = "Count the number of the occurences"
@@ -175,13 +180,17 @@ fn main() -> Result<(), Error> {
     let display = {
         let path_only = args.path_only;
         let no_color = args.no_color || args.no_colour;
+        //let match_only = args.match_only;
         move |path_format: PathFormat| {
             DisplayTerminal::new(
                 width,
                 if path_only {
                     Format::PathOnly { colour: !no_color }
                 } else {
-                    Format::Rich { colour: !no_color }
+                    Format::Rich {
+                        colour: !no_color,
+                        match_only: args.match_only,
+                    }
                 },
                 path_format,
                 Arc::new(StdoutWriter::new()),

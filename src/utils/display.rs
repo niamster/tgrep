@@ -114,7 +114,7 @@ where
 
 #[derive(Clone)]
 pub enum Format {
-    Rich { colour: bool },
+    Rich { colour: bool, match_only: bool },
     PathOnly { colour: bool },
 }
 
@@ -210,14 +210,47 @@ impl Format {
         }
     }
 
-    fn rich_format(&self, width: usize, line: &str, needles: Vec<Range>, colour: bool) -> String {
-        if needles.is_empty() {
+    fn rich_format_needles_only(
+        &self,
+        prefix: &str,
+        line: &str,
+        needles: Vec<Range>,
+        colour: bool,
+    ) -> String {
+        let mut output = Vec::with_capacity(needles.len());
+        for needle in needles {
+            let what = &line[needle.start..needle.end];
+            let content = if colour {
+                Colour::Red.paint(what).to_string()
+            } else {
+                what.to_string()
+            };
+            output.push(format!("{}{}", prefix, content));
+        }
+        // NOTE: Use `\n` as NL
+        // See https://doc.rust-lang.org/std/macro.println.html
+        //    Prints to the standard output, with a newline.
+        //    On all platforms, the newline is the LINE FEED character (\n/U+000A) alone
+        //    (no additional CARRIAGE RETURN (\r/U+000D)).
+        output.join("\n")
+    }
+
+    fn rich_format(
+        &self,
+        width: usize,
+        prefix: &str,
+        line: &str,
+        needles: Vec<Range>,
+        colour: bool,
+    ) -> String {
+        let content = if needles.is_empty() {
             line.to_string()
         } else if needles.len() == 1 {
             self.rich_format_one(width, line, &needles[0], colour)
         } else {
             self.rich_format_many(width, line, needles, colour)
-        }
+        };
+        format!("{}{}", prefix, content)
     }
 
     fn format_path(&self, path: &str, colour: bool) -> String {
@@ -230,7 +263,7 @@ impl Format {
 
     fn separator(&self, separator: &str, code: u8) -> String {
         let colour = match self {
-            Format::Rich { colour } => *colour,
+            Format::Rich { colour, .. } => *colour,
             _ => false,
         };
         if colour {
@@ -244,7 +277,7 @@ impl Format {
 impl OutputFormat for Format {
     fn format(&self, width: usize, path: &str, context: Option<DisplayContext>) -> String {
         match self {
-            Format::Rich { colour } => match context {
+            Format::Rich { colour, match_only } => match context {
                 Some(ctx) => {
                     let prefix = if *colour {
                         let lno = ctx.lno.to_string();
@@ -257,16 +290,12 @@ impl OutputFormat for Format {
                     } else {
                         format!("{}{}{} ", path, ctx.lno_sep, ctx.lno)
                     };
-                    format!(
-                        "{}{}",
-                        prefix,
-                        self.rich_format(
-                            width - prefix.len(),
-                            &ctx.line,
-                            ctx.needle.into_iter().map(Into::into).collect(),
-                            *colour,
-                        )
-                    )
+                    let needles = ctx.needle.into_iter().map(Into::into).collect();
+                    if *match_only {
+                        self.rich_format_needles_only(&prefix, &ctx.line, needles, *colour)
+                    } else {
+                        self.rich_format(width - prefix.len(), &prefix, &ctx.line, needles, *colour)
+                    }
                 }
                 None => self.format_path(path, *colour),
             },
