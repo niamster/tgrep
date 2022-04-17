@@ -38,6 +38,8 @@ struct Cli {
     match_only: bool,
     #[structopt(short = "h", help = "Suppress the prefixing of file names on output")]
     no_path: bool,
+    #[structopt(long = "no-lno", help = "Do not print line numbers")]
+    no_lno: bool,
     #[structopt(
         short = "c",
         long = "count",
@@ -192,6 +194,7 @@ fn main() -> Result<(), Error> {
                         colour: !no_color,
                         match_only: args.match_only,
                         no_path: args.no_path,
+                        no_lno: args.no_lno,
                     }
                 },
                 path_format,
