@@ -36,6 +36,8 @@ struct Cli {
         help = "Prints only the matching parts of the line (each matching part is printed on a separate output line)"
     )]
     match_only: bool,
+    #[structopt(short = "h", help = "Suppress the prefixing of file names on output")]
+    no_path: bool,
     #[structopt(
         short = "c",
         long = "count",
@@ -180,7 +182,6 @@ fn main() -> Result<(), Error> {
     let display = {
         let path_only = args.path_only;
         let no_color = args.no_color || args.no_colour;
-        //let match_only = args.match_only;
         move |path_format: PathFormat| {
             DisplayTerminal::new(
                 width,
@@ -190,6 +191,7 @@ fn main() -> Result<(), Error> {
                     Format::Rich {
                         colour: !no_color,
                         match_only: args.match_only,
+                        no_path: args.no_path,
                     }
                 },
                 path_format,
