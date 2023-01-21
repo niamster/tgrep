@@ -28,13 +28,19 @@ struct Cli {
     #[structopt(long = "ignore-symlinks", help = "Do not follow symlinks")]
     ignore_symlinks: bool,
     #[structopt(short = "v", help = "Invert the sense of matching")]
-    invert: bool,
+    invert_match: bool,
     #[structopt(
         short = "l",
         long = "files-with-matches",
         help = "Show only files with match"
     )]
-    path_only: bool,
+    files_with_match: bool,
+    #[structopt(
+        short = "L",
+        long = "files-without-match",
+        help = "Show only files without match"
+    )]
+    files_without_match: bool,
     #[structopt(
         short = "o",
         help = "Prints only the matching parts of the line (each matching part is printed on a separate output line)"
@@ -147,15 +153,33 @@ fn main() -> Result<(), Error> {
         filter_patterns
     };
     let file_filters = Filters::new(&filter_patterns)?;
+
+    // Special case: `-L` is the same as `-l -v`
+    let invert_match = if args.files_without_match {
+        if args.invert_match {
+            anyhow::bail!("incompatible flags: -L and -v");
+        }
+        true
+    } else {
+        args.invert_match
+    };
+    let path_only = if args.files_without_match {
+        if args.files_with_match {
+            anyhow::bail!("incompatible flags: -L and -l");
+        }
+        true
+    } else {
+        args.files_with_match
+    };
+
     let matcher = {
         // Some fun stuff:
         // 1. https://github.com/rust-lang/rust/issues/22340
         // 2. https://github.com/rust-lang/rust/issues/26085
         // 3. https://github.com/rust-lang/rust/issues/29625
-        let invert = args.invert;
         let regexp = regexp;
         move |line: &str, options| -> Option<Vec<Match>> {
-            let option = if invert {
+            let option = if invert_match {
                 Some(vec![Match::new(0, line.len())])
             } else {
                 None
@@ -186,7 +210,6 @@ fn main() -> Result<(), Error> {
         }
     };
     let display = {
-        let path_only = args.path_only;
         let no_color = args.no_color || args.no_colour;
         move |path_format: PathFormat| {
             DisplayTerminal::new(
@@ -243,12 +266,12 @@ fn main() -> Result<(), Error> {
                 ignore_patterns
             };
         let grep = if args.count {
-            if args.invert {
-                anyhow::bail!("Inverted count is not supported!");
+            if invert_match {
+                anyhow::bail!("incompatible flags: -c and -v");
             }
             grep::grep_count()
-        } else if args.path_only {
-            if args.invert {
+        } else if path_only {
+            if invert_match {
                 grep::grep_matches_all_lines()
             } else {
                 grep::grep_matches_once()
