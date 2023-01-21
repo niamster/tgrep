@@ -178,7 +178,9 @@ impl Pattern {
                 path.len() > pattern.len() && &path[..pattern.len()] == pattern
             }
             PatternType::Suffix(pattern) => {
-                path.len() >= pattern.len() && &path[path.len() - pattern.len()..] == pattern
+                path.len() >= pattern.len()
+                    && path.is_char_boundary(path.len() - pattern.len())
+                    && &path[path.len() - pattern.len()..] == pattern
             }
             PatternType::PrefixStar(pattern) => {
                 if let Some(pos) = memchr::memrchr(b'/', path.as_bytes()) {
