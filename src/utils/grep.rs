@@ -6,7 +6,7 @@ use log::error;
 
 use crate::utils::display::{Display, DisplayContext};
 use crate::utils::lines::LinesReader;
-use crate::utils::matcher::{Matcher, MatcherOptions};
+use crate::utils::matcher::{Match, Matcher, MatcherOptions};
 
 pub type Grep = Arc<Box<dyn Fn(Arc<dyn LinesReader>, Matcher, Arc<dyn Display>) + Send + Sync>>;
 
@@ -177,9 +177,15 @@ pub fn grep_count() -> Grep {
                 Box::new(move |_| false),
                 Box::new(move |_, matches| {
                     if matches > 0 {
+                        let matches = matches.to_string();
+                        let matches_len = matches.len();
                         display.display(
                             &path,
-                            Some(DisplayContext::new(matches, "".to_string(), vec![])),
+                            Some(DisplayContext::new(
+                                0,
+                                matches,
+                                vec![Match::new(0, matches_len)],
+                            )),
                         );
                     }
                 }),
