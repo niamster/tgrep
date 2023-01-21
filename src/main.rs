@@ -29,7 +29,11 @@ struct Cli {
     ignore_symlinks: bool,
     #[structopt(short = "v", help = "Invert the sense of matching")]
     invert: bool,
-    #[structopt(short = "l", help = "Show only files with match")]
+    #[structopt(
+        short = "l",
+        long = "files-with-matches",
+        help = "Show only files with match"
+    )]
     path_only: bool,
     #[structopt(
         short = "o",
