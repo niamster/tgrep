@@ -157,7 +157,7 @@ pub fn grep_matches_all_lines() -> Grep {
                 matcher,
                 Box::new(move |_| false),
                 Box::new(move |total, matches| {
-                    if matches == total {
+                    if matches == total && total != 0 {
                         display.display(&path, None);
                     }
                 }),
