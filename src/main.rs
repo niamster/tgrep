@@ -179,7 +179,7 @@ fn main() -> Result<(), Error> {
         // 3. https://github.com/rust-lang/rust/issues/29625
         let regexp = regexp;
         move |line: &str, options| -> Option<Vec<Match>> {
-            let option = if invert_match {
+            let invert_option = if invert_match {
                 Some(vec![Match::new(0, line.len())])
             } else {
                 None
@@ -189,7 +189,7 @@ fn main() -> Result<(), Error> {
                     let result = regexp
                         .shortest_match(line)
                         .map(|pos| vec![Match::new(0, pos)]);
-                    result.xor(option)
+                    result.xor(invert_option)
                 }
                 MatcherOptions::Exact(max) => {
                     let mut matches = vec![];
@@ -204,7 +204,7 @@ fn main() -> Result<(), Error> {
                     } else {
                         Some(matches)
                     }
-                    .xor(option)
+                    .xor(invert_option)
                 }
             }
         }
