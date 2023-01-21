@@ -216,7 +216,12 @@ fn main() -> Result<(), Error> {
             Ok(meta) if meta.is_dir() => prefix + &path::MAIN_SEPARATOR.to_string(),
             _ => prefix,
         };
-        let fpath = path.canonicalize().unwrap();
+        let fpath = match path.canonicalize() {
+            Ok(path) => path,
+            Err(err) => {
+                anyhow::bail!("failed to open path: {}", err);
+            }
+        };
         let path_format = {
             let fpath = fpath.clone();
             move |entry: &Path| -> String {
