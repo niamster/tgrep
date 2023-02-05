@@ -175,7 +175,9 @@ impl Pattern {
             PatternType::Any => true,
             PatternType::Exact(pattern) => pattern == path,
             PatternType::Prefix(pattern) => {
-                path.len() > pattern.len() && &path[..pattern.len()] == pattern
+                path.len() > pattern.len()
+                    && path.is_char_boundary(pattern.len())
+                    && &path[..pattern.len()] == pattern
             }
             PatternType::Suffix(pattern) => {
                 path.len() >= pattern.len()
@@ -185,7 +187,9 @@ impl Pattern {
             PatternType::PrefixStar(pattern) => {
                 if let Some(pos) = memchr::memrchr(b'/', path.as_bytes()) {
                     let path = &path[pos + 1..];
-                    path.len() > pattern.len() && &path[..pattern.len()] == pattern
+                    path.len() > pattern.len()
+                        && path.is_char_boundary(pattern.len())
+                        && &path[..pattern.len()] == pattern
                 } else {
                     false
                 }
@@ -193,13 +197,16 @@ impl Pattern {
             PatternType::StarSuffix(pattern) => {
                 path.len() > pattern.len()
                     && path.as_bytes()[path.len() - pattern.len() - 1] != b'/'
+                    && path.is_char_boundary(path.len() - pattern.len())
                     && &path[path.len() - pattern.len()..] == pattern
             }
             PatternType::DStarTextDStarText((first, second)) => {
                 if path.len() > first.len() + second.len() {
                     if let Some(pos) = find_in_string(path, first) {
                         let path = &path[pos + first.len()..];
-                        path.len() > second.len() && &path[path.len() - second.len()..] == second
+                        path.len() > second.len()
+                            && path.is_char_boundary(path.len() - second.len())
+                            && &path[path.len() - second.len()..] == second
                     } else {
                         false
                     }
