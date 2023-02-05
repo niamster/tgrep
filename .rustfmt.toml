@@ -1,0 +1,4 @@
+# See https://emacs.stackexchange.com/questions/68804/lsp-rust-analyzer-ignores-edition-value-in-cargo-toml
+# Also https://github.com/rust-lang/rust/issues/61072#issuecomment-559067298
+
+edition = "2021"
