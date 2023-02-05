@@ -29,6 +29,7 @@ pub const GIT_DIR: &str = ".git";
 pub struct Walker {
     tpool: Option<ThreadPool>,
     ignore_patterns: Arc<Patterns>,
+    force_ignore_patterns: Arc<Patterns>,
     file_filters: Arc<Filters>,
     grep: Grep,
     matcher: Matcher,
@@ -57,6 +58,11 @@ impl WalkerBuilder {
         self
     }
 
+    pub fn force_ignore_patterns(mut self, force_ignore_patterns: Patterns) -> WalkerBuilder {
+        self.0.force_ignore_patterns = Arc::new(force_ignore_patterns);
+        self
+    }
+
     pub fn file_filters(mut self, file_filters: Filters) -> WalkerBuilder {
         self.0.file_filters = Arc::new(file_filters);
         self
@@ -82,6 +88,7 @@ impl Walker {
         Walker {
             tpool: None,
             ignore_patterns: Default::default(),
+            force_ignore_patterns: Default::default(),
             file_filters: Default::default(),
             grep,
             matcher,
@@ -98,6 +105,11 @@ impl Walker {
 
     fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
         let path = path.to_str().unwrap();
+        let skip = self.force_ignore_patterns.is_excluded(path, is_dir);
+        if skip {
+            info!("Skipping [forced] {:?}", path);
+            return true;
+        }
         let skip = self.ignore_patterns.is_excluded(path, is_dir);
         if skip {
             info!("Skipping {:?}", path);

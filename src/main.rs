@@ -78,7 +78,7 @@ struct Cli {
         number_of_values = 1,
         help = "Exclude pattern"
     )]
-    ignore_patterns: Vec<String>,
+    force_ignore_patterns: Vec<String>,
     #[structopt(
         short = "f",
         help = "File filter pattern",
@@ -229,11 +229,10 @@ fn main() -> Result<(), Error> {
             )
         }
     };
-    let ignore_patterns = {
-        let mut ignore_patterns = vec![GIT_DIR.to_owned() + "/"];
-        ignore_patterns.extend(args.ignore_patterns);
-        ignore_patterns.dedup();
-        ignore_patterns
+    let force_ignore_patterns = {
+        let mut force_ignore_patterns = vec![GIT_DIR.to_owned() + "/"];
+        force_ignore_patterns.extend(args.force_ignore_patterns);
+        force_ignore_patterns
     };
     for path in paths {
         let path = path.as_path();
@@ -257,7 +256,9 @@ fn main() -> Result<(), Error> {
             }
         };
         let display = display(Arc::new(Box::new(path_format)));
-        let ignore_patterns = Patterns::new(fpath.as_path().to_str().unwrap(), &ignore_patterns);
+        let force_ignore_patterns =
+            Patterns::new(fpath.as_path().to_str().unwrap(), &force_ignore_patterns);
+        let ignore_patterns = Patterns::new(fpath.as_path().to_str().unwrap(), &[]);
         let ignore_patterns =
             if let Some(mut parent_patterns) = Walker::find_ignore_patterns_in_parents(&fpath) {
                 parent_patterns.extend(&ignore_patterns);
@@ -285,6 +286,7 @@ fn main() -> Result<(), Error> {
             WalkerBuilder::new(grep, Arc::new(Box::new(matcher.clone())), Arc::new(display))
                 .thread_pool(tpool.clone())
                 .ignore_patterns(ignore_patterns)
+                .force_ignore_patterns(force_ignore_patterns)
                 .file_filters(file_filters.clone())
                 .ignore_symlinks(args.ignore_symlinks)
                 .print_file_separator(args.before.is_some() || args.after.is_some())

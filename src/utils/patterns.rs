@@ -350,7 +350,9 @@ impl Patterns {
         }
         let mut patterns: Patterns = Default::default();
         patterns.whitelist.push(whitelist);
+        patterns.whitelist.dedup();
         patterns.blacklist.push(blacklist);
+        patterns.blacklist.dedup();
         patterns
     }
 
