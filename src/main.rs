@@ -46,7 +46,11 @@ struct Cli {
         help = "Prints only the matching parts of the line (each matching part is printed on a separate output line)"
     )]
     match_only: bool,
-    #[structopt(short = "h", help = "Suppress the prefixing of file names on output")]
+    #[structopt(
+        short = "h",
+        long = "no-path",
+        help = "Suppress the prefixing of file names on output"
+    )]
     no_path: bool,
     #[structopt(long = "no-lno", help = "Do not print line numbers")]
     no_lno: bool,
