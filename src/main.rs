@@ -95,6 +95,8 @@ struct Cli {
     regexp: String,
     #[structopt(parse(from_os_str))]
     paths: Vec<PathBuf>,
+    #[structopt(long = "path", name = "path", number_of_values = 1, parse(from_os_str))]
+    opt_paths: Vec<PathBuf>,
     /// Pass many times for more log output
     ///
     /// By default, it'll only report errors. Passing `-V` one time also prints
@@ -123,7 +125,7 @@ fn main() -> Result<(), Error> {
         .init();
 
     let stdin = Stdin::new();
-    let paths = if args.paths.is_empty() {
+    let paths = if args.paths.is_empty() && args.opt_paths.is_empty() {
         if stdin.is_readable() {
             vec![]
         } else {
@@ -131,6 +133,11 @@ fn main() -> Result<(), Error> {
         }
     } else {
         args.paths
+    };
+    let paths = {
+        let mut paths = paths.clone();
+        paths.extend(args.opt_paths);
+        paths
     };
     info!("regexp={:?}, paths={:?}", args.regexp, paths);
 
