@@ -232,7 +232,7 @@ fn main() -> Result<(), Error> {
                         colour: !no_color,
                         match_only: args.match_only,
                         no_path: args.no_path,
-                        no_lno: args.no_lno || args.count,
+                        no_lno: args.no_lno || args.count || args.no_path,
                     }
                 },
                 path_format,
