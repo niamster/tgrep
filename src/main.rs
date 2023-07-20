@@ -143,7 +143,12 @@ fn main() -> Result<(), Error> {
         paths.extend(args.opt_paths);
         paths
     };
-    info!("regexp={:?}, paths={:?}", args.regexp, paths);
+    info!(
+        "regexp={:?}, paths={:?}, stdin={:?}",
+        args.regexp,
+        paths,
+        stdin.is_readable()
+    );
 
     let regexp = RegexBuilder::new(args.regexp.as_str())
         .case_insensitive(args.ignore_case)

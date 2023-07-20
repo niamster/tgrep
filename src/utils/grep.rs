@@ -14,9 +14,12 @@ type OnMatch = Box<dyn Fn(DisplayContext) -> bool>;
 type OnEnd = Box<dyn Fn(usize, usize)>;
 
 fn fuzzy_grep(reader: &Arc<dyn LinesReader>, matcher: &Matcher) -> Option<()> {
-    reader
-        .map()
-        .ok()
+    let res = reader.map();
+    if res.is_err() {
+        // Some readers do not support map
+        return Some(());
+    }
+    res.ok()
         .and_then(|map| matcher(map, MatcherOptions::Fuzzy).and(Some(())))
 }
 
