@@ -1,8 +1,8 @@
 use std::{
     fs, ops,
     path::{Path, PathBuf},
-    rc::Rc,
     str,
+    sync::Arc,
 };
 
 use log::debug;
@@ -18,7 +18,7 @@ struct MappedInner {
 }
 
 pub struct Mapped {
-    mapped: Rc<MappedInner>,
+    mapped: Arc<MappedInner>,
 }
 
 impl Mapped {
@@ -26,7 +26,7 @@ impl Mapped {
         let file = fs::File::open(path)?;
         let mmap = unsafe { MmapOptions::new().len(len).map(&file)? };
         Ok(Mapped {
-            mapped: Rc::new(MappedInner {
+            mapped: Arc::new(MappedInner {
                 path: path.to_owned(),
                 mmap,
             }),
@@ -39,13 +39,13 @@ impl ops::Deref for Mapped {
 
     #[inline(always)]
     fn deref(&self) -> &[u8] {
-        &*self.mapped.mmap
+        &self.mapped.mmap
     }
 }
 
 impl LinesReader for Mapped {
     fn map(&self) -> anyhow::Result<&str> {
-        Ok(unsafe { str::from_utf8_unchecked(&*self) })
+        Ok(unsafe { str::from_utf8_unchecked(self) })
     }
 
     fn lines(&self) -> anyhow::Result<Box<LineIterator>> {
@@ -58,14 +58,14 @@ impl LinesReader for Mapped {
 }
 
 struct MappedLines {
-    mapped: Rc<MappedInner>,
+    mapped: Arc<MappedInner>,
     line: ops::Range<usize>,
     pos: usize,
     buf: String,
 }
 
 impl MappedLines {
-    fn new(mapped: Rc<MappedInner>) -> anyhow::Result<Self> {
+    fn new(mapped: Arc<MappedInner>) -> anyhow::Result<Self> {
         Ok(MappedLines {
             mapped,
             line: ops::Range { start: 0, end: 0 },

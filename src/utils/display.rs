@@ -184,7 +184,7 @@ impl Format {
             if offset >= needle.start {
                 (0, "")
             } else {
-                while line.get(offset..needle.start) == None {
+                while line.get(offset..needle.start).is_none() {
                     offset += 1;
                 }
                 (offset, prefix)
@@ -200,7 +200,7 @@ impl Format {
             if needle.end >= offset {
                 (line.len(), "")
             } else {
-                while line.get(needle.end..offset) == None {
+                while line.get(needle.end..offset).is_none() {
                     offset -= 1;
                 }
                 (offset, suffix)
