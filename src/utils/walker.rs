@@ -43,9 +43,7 @@ pub struct WalkerBuilder(Walker);
 
 impl WalkerBuilder {
     pub fn new(grep: Grep, matcher: Matcher, display: Arc<dyn Display>) -> Self {
-        WalkerBuilder {
-            0: Walker::new(grep, matcher, display),
-        }
+        WalkerBuilder(Walker::new(grep, matcher, display))
     }
 
     pub fn thread_pool(mut self, tpool: ThreadPool) -> WalkerBuilder {
@@ -200,7 +198,7 @@ impl Walker {
     ) {
         match Mapped::new(&entry, len) {
             Ok(mapped) => {
-                if content_inspector::inspect(&*mapped).is_binary() {
+                if content_inspector::inspect(&mapped).is_binary() {
                     debug!("Skipping binary file '{}'", entry.display());
                     return;
                 }
@@ -261,7 +259,7 @@ impl Walker {
         let parent = orig
             .parent()
             .ok_or_else(|| anyhow::Error::msg("no parent"))?;
-        env::set_current_dir(&parent)?;
+        env::set_current_dir(parent)?;
         let path = resolved
             .canonicalize()
             .map_err(|e| anyhow::Error::new(e).context(format!("cwd {}", parent.display())));

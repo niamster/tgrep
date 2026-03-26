@@ -255,7 +255,7 @@ fn main() -> Result<(), Error> {
         // See some fun at https://github.com/rust-lang/rfcs/issues/2208
         let prefix = path_clean::clean(path.to_str().unwrap());
         let prefix = match fs::symlink_metadata(path) {
-            Ok(meta) if meta.is_dir() => prefix + &path::MAIN_SEPARATOR.to_string(),
+            Ok(meta) if meta.is_dir() => prefix + path::MAIN_SEPARATOR_STR,
             _ => prefix,
         };
         let fpath = match path.canonicalize() {

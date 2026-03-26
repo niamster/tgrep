@@ -51,7 +51,7 @@ impl BufferedWriter {
     }
 
     pub fn has_some(&self) -> bool {
-        self.lines.lock().unwrap().borrow().len() > 0
+        !self.lines.lock().unwrap().borrow().is_empty()
     }
 }
 
