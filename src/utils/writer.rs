@@ -66,8 +66,6 @@ impl Writer for BufferedWriter {
     fn write(&self, content: &str) {
         let lines = self.lines.lock().unwrap();
         let mut lines = lines.borrow_mut();
-        lines
-            .get_or_insert_with(Vec::new)
-            .push(content.to_owned());
+        lines.get_or_insert_with(Vec::new).push(content.to_owned());
     }
 }

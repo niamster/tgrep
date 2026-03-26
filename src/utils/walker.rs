@@ -1,10 +1,9 @@
 use std::{
-    env,
     fs::{self, DirEntry},
     io,
     path::{Path, PathBuf},
-    rc::Rc,
     sync::atomic::{AtomicBool, Ordering},
+    sync::mpsc,
     sync::Arc,
 };
 
@@ -34,7 +33,7 @@ pub struct Walker {
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
     print_file_separator: bool,
-    file_separator_printed: Rc<AtomicBool>,
+    file_separator_printed: Arc<AtomicBool>,
 }
 
 pub struct WalkerBuilder(Walker);
@@ -139,7 +138,7 @@ impl Walker {
         path.exists()
     }
 
-    fn walk_dir(&self, path: &Path, parents: &[PathBuf]) {
+    fn collect_paths_in_dir(&self, path: &Path, parents: &[PathBuf]) -> Vec<PathBuf> {
         let walker = {
             let mut walker = self.clone();
             if let Some(mut ignore_patterns) = Self::process_gitignore(path) {
@@ -152,7 +151,7 @@ impl Walker {
         let mut to_dive = Vec::new();
         let mut to_grep = Vec::new();
 
-        let mut entries: Vec<_> = fs::read_dir(path)
+        let entries: Vec<_> = fs::read_dir(path)
             .unwrap()
             .filter_map(|entry| entry.ok())
             .filter(|entry| !self.is_ignore_file(entry))
@@ -165,7 +164,6 @@ impl Walker {
             })
             .filter(|(entry, file_type)| !walker.is_excluded(entry, file_type.is_dir()))
             .collect();
-        entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         for (path, file_type) in entries {
             if file_type.is_file() {
                 if !self.file_filters.matches(path.to_str().unwrap()) {
@@ -182,11 +180,8 @@ impl Walker {
             parents.push(path.to_path_buf());
             parents
         };
-        for (entry, file_type) in to_dive {
-            walker.walk_with_parents(&entry, Some(file_type), &parents);
-        }
-
-        self.grep_many(&to_grep);
+        to_grep.extend(walker.collect_paths_many(&to_dive, &parents));
+        to_grep
     }
 
     fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
@@ -201,6 +196,58 @@ impl Walker {
             Err(e) => {
                 warn!("Failed to map file '{}': {}", entry.display(), e);
                 (grep)(entry, matcher, display);
+            }
+        }
+    }
+
+    fn collect_paths_many(
+        &self,
+        entries: &[(PathBuf, fs::FileType)],
+        parents: &[PathBuf],
+    ) -> Vec<PathBuf> {
+        if entries.is_empty() {
+            return Vec::new();
+        }
+        if entries.len() < 2 {
+            let mut paths = Vec::new();
+            for (entry, file_type) in entries {
+                paths.extend(self.collect_paths_with_parents(entry, Some(*file_type), parents));
+            }
+            return paths;
+        }
+
+        match &self.tpool {
+            Some(tpool) if parents.len() <= 1 => {
+                let (tx, rx) = mpsc::channel();
+                let wg = WaitGroup::new();
+                for (entry, file_type) in entries {
+                    let walker = self.clone();
+                    let entry = entry.clone();
+                    let parents = parents.to_owned();
+                    let tx = tx.clone();
+                    let wg = wg.clone();
+                    let file_type = *file_type;
+                    tpool.spawn_ok(async move {
+                        let paths =
+                            walker.collect_paths_with_parents(&entry, Some(file_type), &parents);
+                        let _ = tx.send(paths);
+                        drop(wg);
+                    });
+                }
+                drop(tx);
+                wg.wait();
+                let mut paths = Vec::new();
+                for mut chunk in rx {
+                    paths.append(&mut chunk);
+                }
+                paths
+            }
+            Some(_) | None => {
+                let mut paths = Vec::new();
+                for (entry, file_type) in entries {
+                    paths.extend(self.collect_paths_with_parents(entry, Some(*file_type), parents));
+                }
+                paths
             }
         }
     }
@@ -244,23 +291,23 @@ impl Walker {
     }
 
     fn canonicalize(&self, orig: &Path, resolved: &Path) -> anyhow::Result<PathBuf> {
-        let cwd = env::current_dir()?;
+        if resolved.is_absolute() {
+            return resolved.canonicalize().map_err(anyhow::Error::new);
+        }
         let parent = orig
             .parent()
             .ok_or_else(|| anyhow::Error::msg("no parent"))?;
-        env::set_current_dir(&parent)?;
-        let path = resolved
+        parent
+            .join(resolved)
             .canonicalize()
-            .map_err(|e| anyhow::Error::new(e).context(format!("cwd {}", parent.display())));
-        env::set_current_dir(&cwd)?;
-        path
+            .map_err(|e| anyhow::Error::new(e).context(format!("cwd {}", parent.display())))
     }
 
-    fn process_symlink(&self, orig: &Path, resolved: &Path, parents: &[PathBuf]) {
+    fn process_symlink(&self, orig: &Path, resolved: &Path, parents: &[PathBuf]) -> Vec<PathBuf> {
         let path = self.canonicalize(orig, resolved);
         if let Err(e) = path {
             error!("Failed to canonicalize '{}': {}", resolved.display(), e);
-            return;
+            return Vec::new();
         }
         let path = path.unwrap();
         if let Some(level) = parents.iter().position(|parent| *parent == path) {
@@ -271,7 +318,7 @@ impl Walker {
                 path.display(),
                 level,
             );
-            return;
+            return Vec::new();
         }
         if parents.iter().any(|parent| path.starts_with(parent)) {
             info!(
@@ -280,16 +327,21 @@ impl Walker {
                 resolved.display(),
                 path.display(),
             );
-            return;
+            return Vec::new();
         }
-        self.walk_with_parents(&path, None, &{
+        self.collect_paths_with_parents(&path, None, &{
             let mut parents = parents.to_owned();
             parents.push(path.clone());
             parents
-        });
+        })
     }
 
-    fn walk_with_parents(&self, path: &Path, file_type: Option<fs::FileType>, parents: &[PathBuf]) {
+    fn collect_paths_with_parents(
+        &self,
+        path: &Path,
+        file_type: Option<fs::FileType>,
+        parents: &[PathBuf],
+    ) -> Vec<PathBuf> {
         let file_type = file_type.or_else(|| match fs::symlink_metadata(path) {
             Ok(meta) => Some(meta.file_type()),
             Err(e) => {
@@ -299,23 +351,31 @@ impl Walker {
         });
         let file_type = match file_type {
             Some(file_type) => file_type,
-            _ => return,
+            _ => return Vec::new(),
         };
         if file_type.is_dir() {
-            self.walk_dir(path, parents);
+            self.collect_paths_in_dir(path, parents)
         } else if file_type.is_file() {
-            Walker::grep(self.grep.clone(), Arc::new(path.to_path_buf()), self.matcher.clone(), self.display.clone());
+            if self.file_filters.matches(path.to_str().unwrap()) {
+                vec![path.to_path_buf()]
+            } else {
+                Vec::new()
+            }
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {
                 info!("Skipping symlink '{}'", path.display());
-                return;
+                return Vec::new();
             }
             match fs::read_link(path) {
                 Ok(resolved) => self.process_symlink(path, &resolved, parents),
-                Err(e) => error!("Failed to read link '{}': {}", path.display(), e),
+                Err(e) => {
+                    error!("Failed to read link '{}': {}", path.display(), e);
+                    Vec::new()
+                }
             }
         } else {
-            warn!("Unhandled path '{}': {:?}", path.display(), file_type)
+            warn!("Unhandled path '{}': {:?}", path.display(), file_type);
+            Vec::new()
         }
     }
 
@@ -345,6 +405,8 @@ impl Walker {
     }
 
     pub fn walk(&self, path: &Path) {
-        self.walk_with_parents(path, None, &[]);
+        let mut paths = self.collect_paths_with_parents(path, None, &[]);
+        paths.sort_unstable();
+        self.grep_many(&paths);
     }
 }
