@@ -366,3 +366,186 @@ impl Walker {
         self.walk_with_parents(path, None, &[]);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+    use crate::utils::display::DisplayTerminal;
+    use crate::utils::display::{Format, PathFormat};
+    use crate::utils::matcher::Match;
+    use crate::utils::writer::Writer;
+
+    #[derive(Clone)]
+    struct TestWriter {
+        writes: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl TestWriter {
+        fn new() -> Self {
+            Self {
+                writes: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn lines(&self) -> Vec<String> {
+            self.writes.lock().unwrap().clone()
+        }
+    }
+
+    impl Writer for TestWriter {
+        fn write(&self, content: &str) {
+            self.writes.lock().unwrap().push(content.to_owned());
+        }
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            let mut path = std::env::temp_dir();
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            path.push(format!("tgrep-walker-test-{}", unique));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn write(&self, relative: &str, contents: &[u8]) {
+            let path = self.path.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, contents).unwrap();
+        }
+
+        fn mkdir(&self, relative: &str) {
+            fs::create_dir_all(self.path.join(relative)).unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn matcher() -> Matcher {
+        Arc::new(Box::new(|_, _| Some(vec![Match::new(0, 0)])))
+    }
+
+    fn display(writer: Arc<dyn Writer>) -> Arc<dyn Display> {
+        let path_format: PathFormat = Arc::new(Box::new(|path: &Path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        }));
+        Arc::new(DisplayTerminal::new(
+            120,
+            Format::PathOnly { colour: false },
+            path_format,
+            writer,
+        ))
+    }
+
+    fn grep_recorder() -> Grep {
+        Arc::new(Box::new(|reader, _, display| {
+            display.display(reader.path(), None);
+        }))
+    }
+
+    #[test]
+    fn finds_parent_gitignore_until_git_dir() {
+        let temp = TempDir::new();
+        temp.mkdir(".git");
+        temp.write(".gitignore", b"root-ignored.txt\n");
+        temp.mkdir("nested/deep");
+        temp.write("nested/.gitignore", b"nested-ignored.txt\n");
+
+        let patterns = Walker::find_ignore_patterns_in_parents(&temp.path().join("nested/deep"))
+            .expect("expected parent ignore patterns");
+
+        let root_ignored = temp.path().join("root-ignored.txt");
+        let nested_ignored = temp.path().join("nested/nested-ignored.txt");
+        let outside = temp.path().join("nested/deep/visible.txt");
+
+        assert!(patterns.is_excluded(root_ignored.to_str().unwrap(), false));
+        assert!(patterns.is_excluded(nested_ignored.to_str().unwrap(), false));
+        assert!(!patterns.is_excluded(outside.to_str().unwrap(), false));
+    }
+
+    #[test]
+    fn does_not_search_beyond_repository_root_for_parent_gitignores() {
+        let outer = TempDir::new();
+        outer.write(".gitignore", b"outside.txt\n");
+        outer.mkdir("repo/.git");
+        outer.mkdir("repo/nested");
+
+        let patterns = Walker::find_ignore_patterns_in_parents(&outer.path().join("repo/nested"));
+
+        let outside = outer.path().join("outside.txt");
+        assert!(patterns.is_none() || !patterns.unwrap().is_excluded(outside.to_str().unwrap(), false));
+    }
+
+    #[test]
+    fn walk_honors_gitignore_and_file_filters() {
+        let temp = TempDir::new();
+        temp.write(".gitignore", b"ignored.txt\n");
+        temp.write("visible.rs", b"fn main() {}\n");
+        temp.write("ignored.txt", b"secret\n");
+        temp.write("notes.md", b"# notes\n");
+
+        let writer = TestWriter::new();
+        let walker = WalkerBuilder::new(
+            grep_recorder(),
+            matcher(),
+            display(Arc::new(writer.clone())),
+        )
+        .ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .force_ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .file_filters(Filters::new(&["*.rs".to_string()]).unwrap())
+        .build();
+
+        walker.walk(temp.path());
+
+        assert_eq!(vec!["visible.rs"], writer.lines());
+    }
+
+    #[test]
+    fn force_ignore_patterns_override_walk_results() {
+        let temp = TempDir::new();
+        temp.write("visible.txt", b"ok\n");
+        temp.write("forced.txt", b"skip\n");
+
+        let writer = TestWriter::new();
+        let walker = WalkerBuilder::new(
+            grep_recorder(),
+            matcher(),
+            display(Arc::new(writer.clone())),
+        )
+        .ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .force_ignore_patterns(Patterns::new(
+            temp.path().to_str().unwrap(),
+            &["forced.txt".to_string()],
+        ))
+        .file_filters(Filters::new(&["*".to_string()]).unwrap())
+        .build();
+
+        walker.walk(temp.path());
+
+        assert_eq!(vec!["visible.txt"], writer.lines());
+    }
+}
