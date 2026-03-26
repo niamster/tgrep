@@ -1,10 +1,9 @@
 use std::{
-    env,
     fs::{self, DirEntry},
     io,
     path::{Path, PathBuf},
-    rc::Rc,
     sync::atomic::{AtomicBool, Ordering},
+    sync::mpsc,
     sync::Arc,
 };
 
@@ -19,10 +18,13 @@ use crate::utils::lines::Zero;
 use crate::utils::mapped::Mapped;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
+use crate::utils::prefilter::LiteralPrefilter;
+use crate::utils::timing;
 use crate::utils::writer::BufferedWriter;
 
 static GIT_IGNORE: &str = ".gitignore";
 pub const GIT_DIR: &str = ".git";
+const SMALL_FILE_PREFILTER_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub struct Walker {
@@ -35,7 +37,8 @@ pub struct Walker {
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
     print_file_separator: bool,
-    file_separator_printed: Rc<AtomicBool>,
+    file_separator_printed: Arc<AtomicBool>,
+    prefilter: Option<LiteralPrefilter>,
 }
 
 pub struct WalkerBuilder(Walker);
@@ -75,6 +78,11 @@ impl WalkerBuilder {
         self
     }
 
+    pub fn prefilter(mut self, prefilter: LiteralPrefilter) -> WalkerBuilder {
+        self.0.prefilter = Some(prefilter);
+        self
+    }
+
     pub fn build(self) -> Walker {
         self.0
     }
@@ -93,6 +101,7 @@ impl Walker {
             display,
             print_file_separator: false,
             file_separator_printed: Default::default(),
+            prefilter: None,
         }
     }
 
@@ -101,17 +110,19 @@ impl Walker {
     }
 
     fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
-        let path = path.to_str().unwrap();
-        let skip = self.force_ignore_patterns.is_excluded(path, is_dir);
-        if skip {
-            info!("Skipping [forced] {:?}", path);
-            return true;
-        }
-        let skip = self.ignore_patterns.is_excluded(path, is_dir);
-        if skip {
-            info!("Skipping {:?}", path);
-        }
-        skip
+        timing::time("walk.exclude", || {
+            let path = path.to_str().unwrap();
+            let skip = self.force_ignore_patterns.is_excluded(path, is_dir);
+            if skip {
+                info!("Skipping [forced] {:?}", path);
+                return true;
+            }
+            let skip = self.ignore_patterns.is_excluded(path, is_dir);
+            if skip {
+                info!("Skipping {:?}", path);
+            }
+            skip
+        })
     }
 
     fn process_gitignore(path: &Path) -> Option<Patterns> {
@@ -120,7 +131,7 @@ impl Walker {
             ifile.push(GIT_IGNORE);
             ifile
         };
-        match ifile.to_patterns() {
+        match timing::time("walk.gitignore", || ifile.to_patterns()) {
             Ok(ignore_patterns) => Some(ignore_patterns),
             Err(e) => {
                 match e.downcast_ref::<io::Error>() {
@@ -138,31 +149,49 @@ impl Walker {
         path.exists()
     }
 
-    fn walk_dir(&self, path: &Path, parents: &[PathBuf]) {
-        let walker = {
-            let mut walker = self.clone();
-            if let Some(mut ignore_patterns) = Self::process_gitignore(path) {
-                ignore_patterns.extend(&walker.ignore_patterns);
-                walker.ignore_patterns = Arc::new(ignore_patterns);
-            }
-            walker
-        };
+    fn collect_paths_in_dir(&self, path: &Path, parents: &[PathBuf]) -> Vec<PathBuf> {
+        let mut walker = self.clone();
 
         let mut to_dive = Vec::new();
         let mut to_grep = Vec::new();
 
-        let mut entries: Vec<_> = fs::read_dir(path)
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| !self.is_ignore_file(entry))
-            .filter_map(|entry| match entry.file_type() {
-                Ok(file_type) => Some((entry.path(), file_type)),
-                Err(e) => {
-                    error!("Failed to get path '{}' file type: {}", path.display(), e);
-                    None
+        let entries: Vec<_> = timing::time("walk.read_dir", || {
+            fs::read_dir(path)
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| match entry.file_type() {
+                    Ok(file_type) => {
+                        let is_ignore_file = self.is_ignore_file(&entry);
+                        Some((entry.path(), file_type, is_ignore_file))
+                    }
+                    Err(e) => {
+                        error!("Failed to get path '{}' file type: {}", path.display(), e);
+                        None
+                    }
+                })
+                .collect()
+        });
+        if let Some(ignore_path) = entries
+            .iter()
+            .find_map(|(entry, _, is_ignore_file)| is_ignore_file.then_some(entry))
+        {
+            match timing::time("walk.gitignore", || ignore_path.to_patterns()) {
+                Ok(mut ignore_patterns) => {
+                    ignore_patterns.extend(&walker.ignore_patterns);
+                    walker.ignore_patterns = Arc::new(ignore_patterns);
                 }
-            })
-            .filter(|(entry, file_type)| !walker.is_excluded(entry, file_type.is_dir()))
+                Err(e) => error!(
+                    "Failed to process path '{}': {:?}",
+                    ignore_path.display(),
+                    e
+                ),
+            }
+        }
+        let mut entries: Vec<_> = entries
+            .into_iter()
+            .filter(|(_, _, is_ignore_file)| !is_ignore_file)
+            .filter(|(entry, file_type, _)| !walker.is_excluded(entry, file_type.is_dir()))
+            .map(|(entry, file_type, _)| (entry, file_type))
             .collect();
         entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         for (path, file_type) in entries {
@@ -182,31 +211,60 @@ impl Walker {
             parents
         };
         for (entry, file_type) in to_dive {
-            walker.walk_with_parents(&entry, Some(file_type), &parents);
+            to_grep.extend(walker.collect_paths_with_parents(&entry, Some(file_type), &parents));
         }
 
-        self.grep_many(&to_grep);
+        to_grep
     }
 
-    fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
-        let len = fs::metadata(entry.as_path())
+    fn grep(
+        grep: Grep,
+        entry: Arc<PathBuf>,
+        matcher: Matcher,
+        display: Arc<dyn Display>,
+        prefilter: Option<LiteralPrefilter>,
+    ) {
+        let len = timing::time("file.metadata", || fs::metadata(entry.as_path()))
             .ok()
             .map(|meta| meta.len() as usize);
         if matches!(len, Some(0)) {
-            (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
+            timing::time("grep.total", || {
+                (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display)
+            });
             return;
         }
-        match len.and_then(|len| Mapped::new(&entry, len).ok()) {
+        if let (Some(len), Some(prefilter)) = (len, prefilter.as_ref()) {
+            if len <= SMALL_FILE_PREFILTER_LIMIT {
+                match timing::time("file.read_small", || fs::read(entry.as_path())) {
+                    Ok(content) => {
+                        if timing::time("file.prefilter", || !prefilter.matches(&content)) {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Failed to read '{}' for prefilter: {}", entry.display(), e)
+                    }
+                }
+            }
+        }
+        match len.and_then(|len| timing::time("file.mmap", || Mapped::new(&entry, len).ok())) {
             Some(mapped) => {
-                if content_inspector::inspect(&mapped).is_binary() {
+                if prefilter.as_ref().is_some_and(|prefilter| {
+                    timing::time("file.prefilter", || !prefilter.matches(&mapped))
+                }) {
+                    return;
+                }
+                if timing::time("file.inspect_binary", || {
+                    content_inspector::inspect(&mapped).is_binary()
+                }) {
                     debug!("Skipping binary file '{}'", entry.display());
                     return;
                 }
-                (grep)(Arc::new(mapped), matcher, display);
+                timing::time("grep.total", || (grep)(Arc::new(mapped), matcher, display));
             }
             None => {
                 warn!("Failed to map file '{}'", entry.display());
-                (grep)(entry, matcher, display);
+                timing::time("grep.total", || (grep)(entry, matcher, display));
             }
         }
     }
@@ -220,9 +278,10 @@ impl Walker {
             let matcher = self.matcher.clone();
             let writer = Arc::new(BufferedWriter::new());
             let display = self.display.with_writer(writer.clone());
+            let prefilter = self.prefilter.clone();
             writers.push(writer);
             if entries.len() < 3 {
-                Walker::grep(self.grep.clone(), entry, matcher, display);
+                Walker::grep(self.grep.clone(), entry, matcher, display, prefilter);
                 continue;
             }
             match &self.tpool {
@@ -230,11 +289,11 @@ impl Walker {
                     let grep = self.grep.clone();
                     let wg = wg.clone();
                     tpool.spawn_ok(async move {
-                        Walker::grep(grep, entry, matcher, display);
+                        Walker::grep(grep, entry, matcher, display, prefilter);
                         drop(wg);
                     });
                 }
-                None => Walker::grep(self.grep.clone(), entry, matcher, display),
+                None => Walker::grep(self.grep.clone(), entry, matcher, display, prefilter),
             }
         }
         wg.wait();
@@ -250,23 +309,23 @@ impl Walker {
     }
 
     fn canonicalize(&self, orig: &Path, resolved: &Path) -> anyhow::Result<PathBuf> {
-        let cwd = env::current_dir()?;
+        if resolved.is_absolute() {
+            return resolved.canonicalize().map_err(anyhow::Error::new);
+        }
         let parent = orig
             .parent()
             .ok_or_else(|| anyhow::Error::msg("no parent"))?;
-        env::set_current_dir(parent)?;
-        let path = resolved
+        parent
+            .join(resolved)
             .canonicalize()
-            .map_err(|e| anyhow::Error::new(e).context(format!("cwd {}", parent.display())));
-        env::set_current_dir(&cwd)?;
-        path
+            .map_err(|e| anyhow::Error::new(e).context(format!("cwd {}", parent.display())))
     }
 
-    fn process_symlink(&self, orig: &Path, resolved: &Path, parents: &[PathBuf]) {
+    fn process_symlink(&self, orig: &Path, resolved: &Path, parents: &[PathBuf]) -> Vec<PathBuf> {
         let path = self.canonicalize(orig, resolved);
         if let Err(e) = path {
             error!("Failed to canonicalize '{}': {}", resolved.display(), e);
-            return;
+            return Vec::new();
         }
         let path = path.unwrap();
         if let Some(level) = parents.iter().position(|parent| *parent == path) {
@@ -277,7 +336,7 @@ impl Walker {
                 path.display(),
                 level,
             );
-            return;
+            return Vec::new();
         }
         if parents.iter().any(|parent| path.starts_with(parent)) {
             info!(
@@ -286,16 +345,21 @@ impl Walker {
                 resolved.display(),
                 path.display(),
             );
-            return;
+            return Vec::new();
         }
-        self.walk_with_parents(&path, None, &{
+        self.collect_paths_with_parents(&path, None, &{
             let mut parents = parents.to_owned();
             parents.push(path.clone());
             parents
-        });
+        })
     }
 
-    fn walk_with_parents(&self, path: &Path, file_type: Option<fs::FileType>, parents: &[PathBuf]) {
+    fn collect_paths_with_parents(
+        &self,
+        path: &Path,
+        file_type: Option<fs::FileType>,
+        parents: &[PathBuf],
+    ) -> Vec<PathBuf> {
         let file_type = file_type.or_else(|| match fs::symlink_metadata(path) {
             Ok(meta) => Some(meta.file_type()),
             Err(e) => {
@@ -305,29 +369,140 @@ impl Walker {
         });
         let file_type = match file_type {
             Some(file_type) => file_type,
-            _ => return,
+            _ => return Vec::new(),
         };
         if file_type.is_dir() {
-            self.walk_dir(path, parents);
+            self.collect_paths_in_dir(path, parents)
         } else if file_type.is_file() {
-            Walker::grep(
-                self.grep.clone(),
-                Arc::new(path.to_path_buf()),
-                self.matcher.clone(),
-                self.display.clone(),
-            );
+            if self.file_filters.matches(path.to_str().unwrap()) {
+                vec![path.to_path_buf()]
+            } else {
+                Vec::new()
+            }
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {
                 info!("Skipping symlink '{}'", path.display());
-                return;
+                return Vec::new();
             }
             match fs::read_link(path) {
                 Ok(resolved) => self.process_symlink(path, &resolved, parents),
-                Err(e) => error!("Failed to read link '{}': {}", path.display(), e),
+                Err(e) => {
+                    error!("Failed to read link '{}': {}", path.display(), e);
+                    Vec::new()
+                }
             }
         } else {
-            warn!("Unhandled path '{}': {:?}", path.display(), file_type)
+            warn!("Unhandled path '{}': {:?}", path.display(), file_type);
+            Vec::new()
         }
+    }
+
+    fn collect_paths(&self, path: &Path) -> Vec<PathBuf> {
+        let file_type = match fs::symlink_metadata(path) {
+            Ok(meta) => meta.file_type(),
+            Err(e) => {
+                error!("Failed to get path '{}' metadata: {}", path.display(), e);
+                return Vec::new();
+            }
+        };
+        if !file_type.is_dir() {
+            return self.collect_paths_with_parents(path, Some(file_type), &[]);
+        }
+
+        let mut walker = self.clone();
+
+        let mut root_files = Vec::new();
+        let mut root_dirs = Vec::new();
+        let entries: Vec<_> = match fs::read_dir(path) {
+            Ok(entries) => entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| match entry.file_type() {
+                    Ok(file_type) => {
+                        let is_ignore_file = self.is_ignore_file(&entry);
+                        Some((entry.path(), file_type, is_ignore_file))
+                    }
+                    Err(e) => {
+                        error!("Failed to get path '{}' file type: {}", path.display(), e);
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                error!("Failed to read dir '{}': {}", path.display(), e);
+                return Vec::new();
+            }
+        };
+        if let Some(ignore_path) = entries
+            .iter()
+            .find_map(|(entry, _, is_ignore_file)| is_ignore_file.then_some(entry))
+        {
+            match timing::time("walk.gitignore", || ignore_path.to_patterns()) {
+                Ok(mut ignore_patterns) => {
+                    ignore_patterns.extend(&walker.ignore_patterns);
+                    walker.ignore_patterns = Arc::new(ignore_patterns);
+                }
+                Err(e) => error!(
+                    "Failed to process path '{}': {:?}",
+                    ignore_path.display(),
+                    e
+                ),
+            }
+        }
+        let mut entries: Vec<_> = entries
+            .into_iter()
+            .filter(|(_, _, is_ignore_file)| !is_ignore_file)
+            .filter(|(entry, file_type, _)| !walker.is_excluded(entry, file_type.is_dir()))
+            .map(|(entry, file_type, _)| (entry, file_type))
+            .collect();
+        entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        for (entry, file_type) in entries {
+            if file_type.is_file() {
+                if self.file_filters.matches(entry.to_str().unwrap()) {
+                    root_files.push(entry);
+                }
+            } else {
+                root_dirs.push((entry, file_type));
+            }
+        }
+
+        let parents = vec![path.to_path_buf()];
+        if root_dirs.is_empty() {
+            return root_files;
+        }
+
+        match &self.tpool {
+            Some(tpool) => {
+                let (tx, rx) = mpsc::channel();
+                let wg = WaitGroup::new();
+                for (entry, file_type) in root_dirs {
+                    let walker = walker.clone();
+                    let parents = parents.clone();
+                    let tx = tx.clone();
+                    let wg = wg.clone();
+                    tpool.spawn_ok(async move {
+                        let paths =
+                            walker.collect_paths_with_parents(&entry, Some(file_type), &parents);
+                        let _ = tx.send(paths);
+                        drop(wg);
+                    });
+                }
+                drop(tx);
+                wg.wait();
+                for mut paths in rx {
+                    root_files.append(&mut paths);
+                }
+            }
+            None => {
+                for (entry, file_type) in root_dirs {
+                    root_files.extend(walker.collect_paths_with_parents(
+                        &entry,
+                        Some(file_type),
+                        &parents,
+                    ));
+                }
+            }
+        }
+        root_files
     }
 
     pub fn find_ignore_patterns_in_parents(path: &Path) -> Option<Patterns> {
@@ -356,7 +531,9 @@ impl Walker {
     }
 
     pub fn walk(&self, path: &Path) {
-        self.walk_with_parents(path, None, &[]);
+        let mut paths = self.collect_paths(path);
+        paths.sort_unstable();
+        self.grep_many(&paths);
     }
 }
 

@@ -5,6 +5,8 @@ pub mod lines;
 pub mod mapped;
 pub mod matcher;
 pub mod patterns;
+pub mod prefilter;
 pub mod stdin;
+pub mod timing;
 pub mod walker;
 pub mod writer;

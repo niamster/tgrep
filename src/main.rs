@@ -17,7 +17,9 @@ use crate::utils::filters::Filters;
 use crate::utils::grep;
 use crate::utils::matcher::{Match, MatcherOptions};
 use crate::utils::patterns::Patterns;
+use crate::utils::prefilter;
 use crate::utils::stdin::Stdin;
+use crate::utils::timing;
 use crate::utils::walker::{Walker, WalkerBuilder, GIT_DIR};
 use crate::utils::writer::StdoutWriter;
 
@@ -225,6 +227,11 @@ fn main() -> Result<(), Error> {
             }
         }
     };
+    let prefilter = if !invert_match && !args.ignore_case {
+        prefilter::plain_literal(args.regexp.as_str())
+    } else {
+        None
+    };
     let display = {
         let no_color = args.no_color || args.no_colour;
         move |path_format: PathFormat| {
@@ -300,15 +307,18 @@ fn main() -> Result<(), Error> {
         } else {
             grep::grep()
         };
-        let walker =
+        let mut walker =
             WalkerBuilder::new(grep, Arc::new(Box::new(matcher.clone())), Arc::new(display))
                 .thread_pool(tpool.clone())
                 .ignore_patterns(ignore_patterns)
                 .force_ignore_patterns(force_ignore_patterns)
                 .file_filters(file_filters.clone())
                 .ignore_symlinks(args.ignore_symlinks)
-                .print_file_separator(args.before.is_some() || args.after.is_some())
-                .build();
+                .print_file_separator(args.before.is_some() || args.after.is_some());
+        if let Some(prefilter) = prefilter.clone() {
+            walker = walker.prefilter(prefilter);
+        }
+        let walker = walker.build();
         walker.walk(&fpath);
     }
     if stdin.is_readable() {
@@ -320,6 +330,8 @@ fn main() -> Result<(), Error> {
             Arc::new(display),
         );
     }
+
+    timing::report();
 
     Ok(())
 }
