@@ -229,6 +229,27 @@ Target runtime flow:
 
 ## Migration Plan
 
+### Prototype Findings
+
+The first direct classify-layer prototype was attempted on top of the plain post-PR-19 baseline.
+
+Result:
+
+- it regressed badly on the no-match large-tree workload
+- the main issue was adding extra per-file prefix I/O before removing enough of the old heavy path
+
+Implication:
+
+- a classify layer is still the right long-term direction
+- but it must be introduced on top of a better file-processing base, not layered naively over the original `metadata -> map -> inspect -> grep` flow
+
+Revised guidance:
+
+- start future classify-layer work from the stronger combined branch shape
+- specifically, build it on top of the branch that already:
+  - removes the standalone `metadata()` probe
+  - folds local `.gitignore` handling into directory scans
+
 ### Phase 1
 
 Introduce explicit `FileTask` and `SearchResult` types without changing behavior much.
@@ -310,7 +331,7 @@ Stop pursuing isolated local micro-optimizations as the main strategy.
 Use the current best-performing branch as a reference point, then start a staged redesign with:
 
 1. walker replacement
-2. classify layer
+2. classify layer on top of the stronger combined file path, not the original baseline
 3. split search engines
 4. ordered result buffering
 
