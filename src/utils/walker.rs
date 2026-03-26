@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     env,
     fs::{self, DirEntry},
     io,
@@ -149,31 +148,31 @@ impl Walker {
             walker
         };
 
-        let mut to_dive = BTreeMap::new();
+        let mut to_dive = Vec::new();
         let mut to_grep = Vec::new();
 
-        let entries: Vec<_> = fs::read_dir(path)
+        let mut entries: Vec<_> = fs::read_dir(path)
             .unwrap()
             .filter_map(|entry| entry.ok())
             .filter(|entry| !self.is_ignore_file(entry))
-            .filter_map(|entry| match entry.metadata() {
-                Ok(meta) => Some((entry.path(), meta)),
+            .filter_map(|entry| match entry.file_type() {
+                Ok(file_type) => Some((entry.path(), file_type)),
                 Err(e) => {
-                    error!("Failed to get path '{}' metadata: {}", path.display(), e);
+                    error!("Failed to get path '{}' file type: {}", path.display(), e);
                     None
                 }
             })
-            .filter(|(entry, meta)| !walker.is_excluded(entry, meta.is_dir()))
+            .filter(|(entry, file_type)| !walker.is_excluded(entry, file_type.is_dir()))
             .collect();
-        for (path, meta) in entries {
-            let file_type = meta.file_type();
+        entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        for (path, file_type) in entries {
             if file_type.is_file() {
                 if !self.file_filters.matches(path.to_str().unwrap()) {
                     continue;
                 }
-                to_grep.push((path, meta.len() as usize));
+                to_grep.push(path);
             } else {
-                to_dive.insert(path, meta);
+                to_dive.push((path, file_type));
             }
         }
 
@@ -182,52 +181,48 @@ impl Walker {
             parents.push(path.to_path_buf());
             parents
         };
-        for (entry, meta) in to_dive {
-            walker.walk_with_parents(&entry, Some(meta), &parents);
+        for (entry, file_type) in to_dive {
+            walker.walk_with_parents(&entry, Some(file_type), &parents);
         }
 
         self.grep_many(&to_grep);
     }
 
-    fn grep(
-        grep: Grep,
-        entry: Arc<PathBuf>,
-        len: usize,
-        matcher: Matcher,
-        display: Arc<dyn Display>,
-    ) {
-        match Mapped::new(&entry, len) {
-            Ok(mapped) => {
+    fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
+        let len = fs::metadata(entry.as_path())
+            .ok()
+            .map(|meta| meta.len() as usize);
+        if matches!(len, Some(0)) {
+            (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
+            return;
+        }
+        match len.and_then(|len| Mapped::new(&entry, len).ok()) {
+            Some(mapped) => {
                 if content_inspector::inspect(&mapped).is_binary() {
                     debug!("Skipping binary file '{}'", entry.display());
                     return;
                 }
                 (grep)(Arc::new(mapped), matcher, display);
             }
-            Err(e) => {
-                warn!("Failed to map file '{}': {}", entry.display(), e);
+            None => {
+                warn!("Failed to map file '{}'", entry.display());
                 (grep)(entry, matcher, display);
             }
         }
     }
 
-    fn grep_many(&self, entries: &[(PathBuf, usize)]) {
+    fn grep_many(&self, entries: &[PathBuf]) {
         let writer = self.display.writer();
-        let mut writers = BTreeMap::new();
+        let mut writers = Vec::with_capacity(entries.len());
         let wg = WaitGroup::new();
-        for (entry, len) in entries {
+        for entry in entries {
             let entry = Arc::new(entry.clone());
             let matcher = self.matcher.clone();
             let writer = Arc::new(BufferedWriter::new());
             let display = self.display.with_writer(writer.clone());
-            writers.insert(entry.clone(), writer);
-            let len = *len;
-            if len == 0 {
-                (self.grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
-                continue;
-            }
+            writers.push(writer);
             if entries.len() < 3 {
-                Walker::grep(self.grep.clone(), entry, len, matcher, display);
+                Walker::grep(self.grep.clone(), entry, matcher, display);
                 continue;
             }
             match &self.tpool {
@@ -235,15 +230,15 @@ impl Walker {
                     let grep = self.grep.clone();
                     let wg = wg.clone();
                     tpool.spawn_ok(async move {
-                        Walker::grep(grep, entry, len, matcher, display);
+                        Walker::grep(grep, entry, matcher, display);
                         drop(wg);
                     });
                 }
-                None => Walker::grep(self.grep.clone(), entry, len, matcher, display),
+                None => Walker::grep(self.grep.clone(), entry, matcher, display),
             }
         }
         wg.wait();
-        for (_, w) in writers {
+        for w in writers {
             if self.print_file_separator
                 && w.has_some()
                 && self.file_separator_printed.swap(true, Ordering::Relaxed)
@@ -300,26 +295,24 @@ impl Walker {
         });
     }
 
-    fn walk_with_parents(&self, path: &Path, meta: Option<fs::Metadata>, parents: &[PathBuf]) {
-        let meta = meta.or_else(|| match fs::symlink_metadata(path) {
-            Ok(meta) => Some(meta),
+    fn walk_with_parents(&self, path: &Path, file_type: Option<fs::FileType>, parents: &[PathBuf]) {
+        let file_type = file_type.or_else(|| match fs::symlink_metadata(path) {
+            Ok(meta) => Some(meta.file_type()),
             Err(e) => {
                 error!("Failed to get path '{}' metadata: {}", path.display(), e);
                 None
             }
         });
-        let meta = match meta {
-            Some(meta) => meta,
+        let file_type = match file_type {
+            Some(file_type) => file_type,
             _ => return,
         };
-        let file_type = meta.file_type();
         if file_type.is_dir() {
             self.walk_dir(path, parents);
         } else if file_type.is_file() {
             Walker::grep(
                 self.grep.clone(),
                 Arc::new(path.to_path_buf()),
-                meta.len() as usize,
                 self.matcher.clone(),
                 self.display.clone(),
             );
@@ -455,10 +448,7 @@ mod tests {
 
     fn display(writer: Arc<dyn Writer>) -> Arc<dyn Display> {
         let path_format: PathFormat = Arc::new(Box::new(|path: &Path| {
-            path.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
+            path.file_name().unwrap().to_string_lossy().into_owned()
         }));
         Arc::new(DisplayTerminal::new(
             120,
@@ -504,7 +494,12 @@ mod tests {
         let patterns = Walker::find_ignore_patterns_in_parents(&outer.path().join("repo/nested"));
 
         let outside = outer.path().join("outside.txt");
-        assert!(patterns.is_none() || !patterns.unwrap().is_excluded(outside.to_str().unwrap(), false));
+        assert!(
+            patterns.is_none()
+                || !patterns
+                    .unwrap()
+                    .is_excluded(outside.to_str().unwrap(), false)
+        );
     }
 
     #[test]
