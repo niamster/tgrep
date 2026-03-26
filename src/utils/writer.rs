@@ -62,3 +62,48 @@ impl Writer for BufferedWriter {
         lines.push(content.to_owned());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestWriter {
+        writes: Arc<Mutex<RefCell<Vec<String>>>>,
+    }
+
+    impl TestWriter {
+        fn new() -> Self {
+            Self {
+                writes: Arc::new(Mutex::new(RefCell::new(Vec::new()))),
+            }
+        }
+
+        fn lines(&self) -> Vec<String> {
+            self.writes.lock().unwrap().borrow().clone()
+        }
+    }
+
+    impl Writer for TestWriter {
+        fn write(&self, content: &str) {
+            self.writes.lock().unwrap().borrow_mut().push(content.to_owned());
+        }
+    }
+
+    #[test]
+    fn buffered_writer_tracks_presence_and_flushes_in_order() {
+        let buffered = BufferedWriter::new();
+        let test_writer = Arc::new(TestWriter::new());
+        let writer: Arc<dyn Writer> = test_writer.clone();
+
+        assert!(!buffered.has_some());
+
+        buffered.write("first");
+        buffered.write("second");
+
+        assert!(buffered.has_some());
+        buffered.flush(&writer);
+
+        assert_eq!(vec!["first", "second"], test_writer.lines());
+    }
+}
