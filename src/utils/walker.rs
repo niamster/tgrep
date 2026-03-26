@@ -370,6 +370,8 @@ impl Walker {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -433,6 +435,11 @@ mod tests {
 
         fn mkdir(&self, relative: &str) {
             fs::create_dir_all(self.path.join(relative)).unwrap();
+        }
+
+        #[cfg(unix)]
+        fn symlink_dir(&self, target: &Path, link: &str) {
+            symlink(target, self.path.join(link)).unwrap();
         }
     }
 
@@ -547,5 +554,54 @@ mod tests {
         walker.walk(temp.path());
 
         assert_eq!(vec!["visible.txt"], writer.lines());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_skips_symlinks_when_configured() {
+        let temp = TempDir::new();
+        let external = TempDir::new();
+        external.write("linked.txt", b"external\n");
+        temp.symlink_dir(external.path(), "external-link");
+
+        let writer = TestWriter::new();
+        let walker = WalkerBuilder::new(
+            grep_recorder(),
+            matcher(),
+            display(Arc::new(writer.clone())),
+        )
+        .ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .force_ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .file_filters(Filters::new(&["*".to_string()]).unwrap())
+        .ignore_symlinks(true)
+        .build();
+
+        walker.walk(temp.path());
+
+        assert!(writer.lines().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_follows_external_directory_symlinks() {
+        let temp = TempDir::new();
+        let external = TempDir::new();
+        external.write("linked.txt", b"external\n");
+        temp.symlink_dir(external.path(), "external-link");
+
+        let writer = TestWriter::new();
+        let walker = WalkerBuilder::new(
+            grep_recorder(),
+            matcher(),
+            display(Arc::new(writer.clone())),
+        )
+        .ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .force_ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .file_filters(Filters::new(&["*".to_string()]).unwrap())
+        .build();
+
+        walker.walk(temp.path());
+
+        assert_eq!(vec!["linked.txt"], writer.lines());
     }
 }
