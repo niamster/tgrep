@@ -94,3 +94,69 @@ where
         }
     }
 }
+#[derive(Clone, PartialOrd, PartialEq, Ord, Eq)]
+pub struct Zero {
+    path: PathBuf,
+}
+
+impl Zero {
+    pub fn new(path: PathBuf) -> Self {
+        Zero { path }
+    }
+}
+
+impl LinesReader for Zero {
+    fn map(&self) -> anyhow::Result<&str> {
+        Ok("")
+    }
+
+    fn lines(&self) -> anyhow::Result<Box<LineIterator>> {
+        Ok(Box::new(self.clone()))
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl StreamingIterator for Zero {
+    type Item = str;
+
+    fn advance(&mut self) {}
+
+    fn get(&self) -> Option<&Self::Item> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use streaming_iterator::StreamingIterator;
+
+    use super::*;
+
+    #[test]
+    fn lines_trim_lf_and_crlf_endings() {
+        let mut lines = Lines::new(
+            Cursor::new(b"alpha\nbeta\r\ngamma".to_vec()),
+            PathBuf::from("input.txt"),
+        );
+
+        assert_eq!(Some("alpha"), lines.next());
+        assert_eq!(Some("beta"), lines.next());
+        assert_eq!(Some("gamma"), lines.next());
+        assert_eq!(None, lines.next());
+    }
+
+    #[test]
+    fn zero_reader_maps_to_empty_and_has_no_lines() {
+        let zero = Zero::new(PathBuf::from("empty.txt"));
+
+        assert_eq!("", LinesReader::map(&zero).unwrap());
+
+        let mut lines = zero.lines().unwrap();
+        assert_eq!(None, lines.next());
+    }
+}

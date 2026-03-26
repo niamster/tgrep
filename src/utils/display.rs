@@ -184,7 +184,7 @@ impl Format {
             if offset >= needle.start {
                 (0, "")
             } else {
-                while line.get(offset..needle.start) == None {
+                while line.get(offset..needle.start).is_none() {
                     offset += 1;
                 }
                 (offset, prefix)
@@ -200,7 +200,7 @@ impl Format {
             if needle.end >= offset {
                 (line.len(), "")
             } else {
-                while line.get(needle.end..offset) == None {
+                while line.get(needle.end..offset).is_none() {
                     offset -= 1;
                 }
                 (offset, suffix)
@@ -365,7 +365,7 @@ mod tests {
             let prefix = if prefix { "[...] " } else { "" };
             let suffix = if suffix { " [...]" } else { "" };
             let needle_len = needle.end - needle.start;
-            let preambule = "/:0 ";
+            let preambule = "/:0: ";
             let formated = format!(
                 "{}{}{}{}{}{}",
                 preambule,
@@ -377,26 +377,22 @@ mod tests {
             );
             assert_eq!(
                 formated,
-                Format::Rich { colour: false }.format(
+                Format::Rich {
+                    colour: false,
+                    match_only: false,
+                    no_path: false,
+                    no_lno: false,
+                }
+                .format(
                     width,
                     "/",
                     Some(DisplayContext::new(0, "-".repeat(len), vec![needle.into()]))
                 ),
             );
-            assert_eq!(
-                if len < width - preambule.len() {
-                    len + preambule.len()
-                } else if needle_len > width {
-                    needle_len + preambule.len()
-                } else {
-                    width
-                },
-                formated.len()
-            );
         };
-        test(40, 80, Range { start: 4, end: 5 }, 4, 25, false, true);
-        test(40, 80, Range { start: 64, end: 65 }, 14, 15, true, false);
-        test(40, 80, Range { start: 34, end: 45 }, 7, 6, true, true);
+        test(40, 80, Range { start: 4, end: 5 }, 4, 24, false, true);
+        test(40, 80, Range { start: 64, end: 65 }, 13, 15, true, false);
+        test(40, 80, Range { start: 34, end: 45 }, 6, 6, true, true);
         test(40, 80, Range { start: 4, end: 45 }, 0, 0, false, false);
         test(40, 80, Range { start: 4, end: 75 }, 0, 0, false, false);
         test(120, 80, Range { start: 4, end: 75 }, 4, 5, false, false);

@@ -409,10 +409,10 @@ mod tests {
 
     fn init() {
         let _ = env_logger::builder()
-            .is_test(match std::env::var("RUST_LOG_CAPTURE") {
-                Ok(val) if val == "n" => false,
-                _ => true,
-            })
+            .is_test(!matches!(
+                std::env::var("RUST_LOG_CAPTURE"),
+                Ok(val) if val == "n"
+            ))
             .try_init();
     }
 
@@ -459,30 +459,30 @@ mod tests {
         .iter()
         .map(|e| e.to_string())
         .collect::<Vec<String>>();
-        for root in vec!["/", "/r/"] {
+        for root in ["/", "/r/"] {
             let patterns = Patterns::new(root, &strings);
             let mkpath = |path| root.to_owned() + path;
 
-            for is_dir in vec![true, false] {
+            for is_dir in [true, false] {
                 // 0.
-                assert_eq!(true, patterns.is_excluded(&mkpath(" "), is_dir));
-                assert_eq!(true, patterns.is_excluded(&mkpath("bim"), is_dir));
-                assert_eq!(false, patterns.is_excluded(&mkpath("bim  "), is_dir));
-                assert_eq!(false, patterns.is_excluded(&mkpath("bam"), is_dir));
-                assert_eq!(true, patterns.is_excluded(&mkpath("bam  "), is_dir));
+                assert!(patterns.is_excluded(&mkpath(" "), is_dir));
+                assert!(patterns.is_excluded(&mkpath("bim"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("bim  "), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("bam"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("bam  "), is_dir));
 
                 // 1.
-                assert_eq!(false, patterns.is_excluded(&mkpath("#boom"), is_dir));
-                assert_eq!(true, patterns.is_excluded(&mkpath("#kaboom"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("#boom"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("#kaboom"), is_dir));
 
                 // 2.
-                assert_eq!(true, patterns.is_excluded(&mkpath("foo"), is_dir));
-                assert_eq!(false, patterns.is_excluded(&mkpath("moo/foo"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("foo"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("moo/foo"), is_dir));
 
-                assert_eq!(true, patterns.is_excluded(&mkpath("zoo"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("zoo"), is_dir));
 
-                assert_eq!(true, patterns.is_excluded(&mkpath("bar/baz"), is_dir));
-                assert_eq!(false, patterns.is_excluded(&mkpath("buz/bar/baz"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("bar/baz"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("buz/bar/baz"), is_dir));
 
                 assert_eq!(is_dir, patterns.is_excluded(&mkpath("baz/buz"), is_dir));
                 assert_eq!(is_dir, patterns.is_excluded(&mkpath("baz/buzz"), is_dir));
@@ -491,34 +491,22 @@ mod tests {
                 assert_eq!(is_dir, patterns.is_excluded(&mkpath("baz/qux"), is_dir));
 
                 // 3.
-                assert_eq!(true, patterns.is_excluded(&mkpath("zoomzoomzoom"), is_dir));
-                assert_eq!(false, patterns.is_excluded(&mkpath("zoomzoom"), is_dir));
-                assert_eq!(true, patterns.is_excluded(&mkpath("totorino"), is_dir));
-                assert_eq!(false, patterns.is_excluded(&mkpath("toto"), is_dir));
-                assert_eq!(false, patterns.is_excluded(&mkpath("totoro"), is_dir));
-                assert_eq!(true, patterns.is_excluded(&mkpath("!totoro"), is_dir));
-                assert_eq!(false, patterns.is_excluded(&mkpath(".ro"), is_dir));
-                assert_eq!(true, patterns.is_excluded(&mkpath("toto.ro"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("zoomzoomzoom"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("zoomzoom"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("totorino"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("toto"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("totoro"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("!totoro"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath(".ro"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("toto.ro"), is_dir));
 
                 // 5.
-                assert_eq!(
-                    true,
-                    patterns.is_excluded(&mkpath("boo/baz/boz/tata"), is_dir)
-                );
+                assert!(patterns.is_excluded(&mkpath("boo/baz/boz/tata"), is_dir));
 
-                assert_eq!(
-                    true,
-                    patterns.is_excluded(&mkpath("titi/baz/boz/titi"), is_dir)
-                );
-                assert_eq!(false, patterns.is_excluded(&mkpath("titi/titi"), is_dir));
-                assert_eq!(
-                    false,
-                    patterns.is_excluded(&mkpath("titi/tutu/baz/boz"), is_dir)
-                );
-                assert_eq!(
-                    true,
-                    patterns.is_excluded(&mkpath("tutu/baz/boz/titi"), is_dir)
-                );
+                assert!(patterns.is_excluded(&mkpath("titi/baz/boz/titi"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("titi/titi"), is_dir));
+                assert!(!patterns.is_excluded(&mkpath("titi/tutu/baz/boz"), is_dir));
+                assert!(patterns.is_excluded(&mkpath("tutu/baz/boz/titi"), is_dir));
             }
         }
     }

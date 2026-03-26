@@ -28,3 +28,27 @@ impl Filters {
         self.patterns.matches(path, false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_prefixed_glob_filters() {
+        let filters = Filters::new(&["*.rs".to_string(), "src/*.toml".to_string()]).unwrap();
+
+        assert!(filters.matches("/tmp/project/src/main.rs"));
+        assert!(filters.matches("/tmp/project/src/Cargo.toml"));
+        assert!(!filters.matches("/tmp/project/src/main.py"));
+        assert!(!filters.matches("/tmp/project/Cargo.toml"));
+    }
+
+    #[test]
+    fn preserves_double_star_prefixes() {
+        let filters = Filters::new(&["**/README.md".to_string()]).unwrap();
+
+        assert!(filters.matches("/tmp/project/README.md"));
+        assert!(filters.matches("/tmp/project/docs/README.md"));
+        assert!(!filters.matches("/tmp/project/docs/README.txt"));
+    }
+}

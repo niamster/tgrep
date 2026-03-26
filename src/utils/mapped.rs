@@ -1,8 +1,8 @@
 use std::{
     fs, ops,
     path::{Path, PathBuf},
-    rc::Rc,
     str,
+    sync::Arc,
 };
 
 use log::debug;
@@ -18,7 +18,7 @@ struct MappedInner {
 }
 
 pub struct Mapped {
-    mapped: Rc<MappedInner>,
+    mapped: Arc<MappedInner>,
 }
 
 impl Mapped {
@@ -26,7 +26,7 @@ impl Mapped {
         let file = fs::File::open(path)?;
         let mmap = unsafe { MmapOptions::new().map(&file)? };
         Ok(Mapped {
-            mapped: Rc::new(MappedInner {
+            mapped: Arc::new(MappedInner {
                 path: path.to_owned(),
                 mmap,
             }),
@@ -39,13 +39,13 @@ impl ops::Deref for Mapped {
 
     #[inline(always)]
     fn deref(&self) -> &[u8] {
-        &*self.mapped.mmap
+        &self.mapped.mmap
     }
 }
 
 impl LinesReader for Mapped {
     fn map(&self) -> anyhow::Result<&str> {
-        Ok(unsafe { str::from_utf8_unchecked(&*self) })
+        Ok(unsafe { str::from_utf8_unchecked(self) })
     }
 
     fn lines(&self) -> anyhow::Result<Box<LineIterator>> {
@@ -58,14 +58,14 @@ impl LinesReader for Mapped {
 }
 
 struct MappedLines {
-    mapped: Rc<MappedInner>,
+    mapped: Arc<MappedInner>,
     line: ops::Range<usize>,
     pos: usize,
     buf: String,
 }
 
 impl MappedLines {
-    fn new(mapped: Rc<MappedInner>) -> anyhow::Result<Self> {
+    fn new(mapped: Arc<MappedInner>) -> anyhow::Result<Self> {
         Ok(MappedLines {
             mapped,
             line: ops::Range { start: 0, end: 0 },
@@ -89,10 +89,7 @@ impl StreamingIterator for MappedLines {
             None => mmap.len(),
         };
         self.pos = self.line.end + 1;
-        if self.pos < self.mapped.mmap.len() && mmap[self.pos] == b'\r' {
-            self.pos += 1;
-        }
-        if (1..mmap.len()).contains(&self.line.end) && mmap[self.line.end] == b'\r' {
+        if self.line.end > self.line.start && mmap[self.line.end - 1] == b'\r' {
             self.line.end -= 1;
         }
     }
@@ -121,5 +118,74 @@ impl StreamingIterator for MappedLines {
                 Some(&self.buf)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    struct TempFile {
+        path: PathBuf,
+    }
+
+    impl TempFile {
+        fn new(contents: &[u8]) -> Self {
+            let mut path = std::env::temp_dir();
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            path.push(format!("tgrep-mapped-test-{}", unique));
+            fs::write(&path, contents).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+
+    #[test]
+    fn mapped_reader_returns_lines() {
+        let file = TempFile::new(b"alpha\nbeta\ngamma");
+        let mapped = Mapped::new(file.path(), 16).unwrap();
+        let mut lines = mapped.lines().unwrap();
+
+        assert_eq!(Some("alpha"), lines.next());
+        assert_eq!(Some("beta"), lines.next());
+        assert_eq!(Some("gamma"), lines.next());
+        assert_eq!(None, lines.next());
+    }
+
+    #[test]
+    fn mapped_reader_trims_cr_before_lf() {
+        let file = TempFile::new(b"alpha\r\nbeta\r\n");
+        let mapped = Mapped::new(file.path(), 13).unwrap();
+        let mut lines = mapped.lines().unwrap();
+
+        assert_eq!(Some("alpha"), lines.next());
+        assert_eq!(Some("beta"), lines.next());
+        assert_eq!(None, lines.next());
+    }
+
+    #[test]
+    fn mapped_reader_falls_back_for_invalid_utf8() {
+        let file = TempFile::new(b"ok\nf\x80o\n");
+        let mapped = Mapped::new(file.path(), 7).unwrap();
+        let mut lines = mapped.lines().unwrap();
+
+        assert_eq!(Some("ok"), lines.next());
+        assert_eq!(Some("f\u{80}o"), lines.next());
+        assert_eq!(None, lines.next());
     }
 }

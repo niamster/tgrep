@@ -1,0 +1,14 @@
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+name: Test
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - run: cargo test
