@@ -19,6 +19,7 @@ use crate::utils::lines::Zero;
 use crate::utils::mapped::Mapped;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
+use crate::utils::timing;
 use crate::utils::writer::BufferedWriter;
 
 static GIT_IGNORE: &str = ".gitignore";
@@ -189,24 +190,43 @@ impl Walker {
     }
 
     fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
-        let len = fs::metadata(entry.as_path())
-            .ok()
-            .map(|meta| meta.len() as usize);
-        if matches!(len, Some(0)) {
-            (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
+        let file = match timing::time("file.open", || fs::File::open(entry.as_path())) {
+            Ok(file) => file,
+            Err(e) => {
+                warn!("Failed to open file '{}': {}", entry.display(), e);
+                (grep)(entry, matcher, display);
+                return;
+            }
+        };
+        let len = match timing::time("file.metadata", || file.metadata()) {
+            Ok(meta) => meta.len() as usize,
+            Err(e) => {
+                warn!("Failed to get file metadata '{}': {}", entry.display(), e);
+                (grep)(entry, matcher, display);
+                return;
+            }
+        };
+        if len == 0 {
+            timing::time("grep.total", || {
+                (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display)
+            });
             return;
         }
-        match len.and_then(|len| Mapped::new(&entry, len).ok()) {
+        match timing::time("file.mmap", || {
+            Mapped::from_file((*entry).clone(), file, len).ok()
+        }) {
             Some(mapped) => {
-                if content_inspector::inspect(&mapped).is_binary() {
+                if timing::time("file.inspect_binary", || {
+                    content_inspector::inspect(&mapped).is_binary()
+                }) {
                     debug!("Skipping binary file '{}'", entry.display());
                     return;
                 }
-                (grep)(Arc::new(mapped), matcher, display);
+                timing::time("grep.total", || (grep)(Arc::new(mapped), matcher, display));
             }
             None => {
                 warn!("Failed to map file '{}'", entry.display());
-                (grep)(entry, matcher, display);
+                timing::time("grep.total", || (grep)(entry, matcher, display));
             }
         }
     }

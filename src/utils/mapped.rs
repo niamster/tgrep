@@ -1,9 +1,4 @@
-use std::{
-    fs, ops,
-    path::{Path, PathBuf},
-    str,
-    sync::Arc,
-};
+use std::{fs::File, ops, path::PathBuf, str, sync::Arc};
 
 use log::debug;
 use memchr::memchr;
@@ -22,14 +17,10 @@ pub struct Mapped {
 }
 
 impl Mapped {
-    pub fn new(path: &Path, len: usize) -> anyhow::Result<Self> {
-        let file = fs::File::open(path)?;
+    pub fn from_file(path: PathBuf, file: File, len: usize) -> anyhow::Result<Self> {
         let mmap = unsafe { MmapOptions::new().len(len).map(&file)? };
         Ok(Mapped {
-            mapped: Arc::new(MappedInner {
-                path: path.to_owned(),
-                mmap,
-            }),
+            mapped: Arc::new(MappedInner { path, mmap }),
         })
     }
 }
@@ -123,7 +114,7 @@ impl StreamingIterator for MappedLines {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::fs::{self, File};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -158,7 +149,12 @@ mod tests {
     #[test]
     fn mapped_reader_returns_lines() {
         let file = TempFile::new(b"alpha\nbeta\ngamma");
-        let mapped = Mapped::new(file.path(), 16).unwrap();
+        let mapped = Mapped::from_file(
+            file.path().to_path_buf(),
+            File::open(file.path()).unwrap(),
+            16,
+        )
+        .unwrap();
         let mut lines = mapped.lines().unwrap();
 
         assert_eq!(Some("alpha"), lines.next());
@@ -170,7 +166,12 @@ mod tests {
     #[test]
     fn mapped_reader_trims_cr_before_lf() {
         let file = TempFile::new(b"alpha\r\nbeta\r\n");
-        let mapped = Mapped::new(file.path(), 13).unwrap();
+        let mapped = Mapped::from_file(
+            file.path().to_path_buf(),
+            File::open(file.path()).unwrap(),
+            13,
+        )
+        .unwrap();
         let mut lines = mapped.lines().unwrap();
 
         assert_eq!(Some("alpha"), lines.next());
@@ -181,7 +182,12 @@ mod tests {
     #[test]
     fn mapped_reader_falls_back_for_invalid_utf8() {
         let file = TempFile::new(b"ok\nf\x80o\n");
-        let mapped = Mapped::new(file.path(), 7).unwrap();
+        let mapped = Mapped::from_file(
+            file.path().to_path_buf(),
+            File::open(file.path()).unwrap(),
+            7,
+        )
+        .unwrap();
         let mut lines = mapped.lines().unwrap();
 
         assert_eq!(Some("ok"), lines.next());
