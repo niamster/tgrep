@@ -1,5 +1,8 @@
 # From https://github.com/marketplace/actions/rust-clippy-check
-on: push
+on:
+  push:
+  pull_request:
+
 name: Clippy check
 jobs:
   clippy_check:
