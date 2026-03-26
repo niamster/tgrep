@@ -18,6 +18,7 @@ use crate::utils::grep;
 use crate::utils::matcher::{Match, MatcherOptions};
 use crate::utils::patterns::Patterns;
 use crate::utils::stdin::Stdin;
+use crate::utils::timing;
 use crate::utils::walker::{Walker, WalkerBuilder, GIT_DIR};
 use crate::utils::writer::StdoutWriter;
 
@@ -320,6 +321,8 @@ fn main() -> Result<(), Error> {
             Arc::new(display),
         );
     }
+
+    timing::report();
 
     Ok(())
 }

@@ -19,6 +19,7 @@ use crate::utils::lines::Zero;
 use crate::utils::mapped::Mapped;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
+use crate::utils::timing;
 use crate::utils::writer::BufferedWriter;
 
 static GIT_IGNORE: &str = ".gitignore";
@@ -101,17 +102,19 @@ impl Walker {
     }
 
     fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
-        let path = path.to_str().unwrap();
-        let skip = self.force_ignore_patterns.is_excluded(path, is_dir);
-        if skip {
-            info!("Skipping [forced] {:?}", path);
-            return true;
-        }
-        let skip = self.ignore_patterns.is_excluded(path, is_dir);
-        if skip {
-            info!("Skipping {:?}", path);
-        }
-        skip
+        timing::time("walk.exclude", || {
+            let path = path.to_str().unwrap();
+            let skip = self.force_ignore_patterns.is_excluded(path, is_dir);
+            if skip {
+                info!("Skipping [forced] {:?}", path);
+                return true;
+            }
+            let skip = self.ignore_patterns.is_excluded(path, is_dir);
+            if skip {
+                info!("Skipping {:?}", path);
+            }
+            skip
+        })
     }
 
     fn process_gitignore(path: &Path) -> Option<Patterns> {
@@ -120,7 +123,7 @@ impl Walker {
             ifile.push(GIT_IGNORE);
             ifile
         };
-        match ifile.to_patterns() {
+        match timing::time("walk.gitignore", || ifile.to_patterns()) {
             Ok(ignore_patterns) => Some(ignore_patterns),
             Err(e) => {
                 match e.downcast_ref::<io::Error>() {
@@ -139,30 +142,48 @@ impl Walker {
     }
 
     fn walk_dir(&self, path: &Path, parents: &[PathBuf]) {
-        let walker = {
-            let mut walker = self.clone();
-            if let Some(mut ignore_patterns) = Self::process_gitignore(path) {
-                ignore_patterns.extend(&walker.ignore_patterns);
-                walker.ignore_patterns = Arc::new(ignore_patterns);
-            }
-            walker
-        };
+        let mut walker = self.clone();
 
         let mut to_dive = Vec::new();
         let mut to_grep = Vec::new();
 
-        let mut entries: Vec<_> = fs::read_dir(path)
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| !self.is_ignore_file(entry))
-            .filter_map(|entry| match entry.file_type() {
-                Ok(file_type) => Some((entry.path(), file_type)),
-                Err(e) => {
-                    error!("Failed to get path '{}' file type: {}", path.display(), e);
-                    None
+        let entries: Vec<_> = timing::time("walk.read_dir", || {
+            fs::read_dir(path)
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| match entry.file_type() {
+                    Ok(file_type) => {
+                        let is_ignore_file = self.is_ignore_file(&entry);
+                        Some((entry.path(), file_type, is_ignore_file))
+                    }
+                    Err(e) => {
+                        error!("Failed to get path '{}' file type: {}", path.display(), e);
+                        None
+                    }
+                })
+                .collect()
+        });
+        if let Some(ignore_path) = entries
+            .iter()
+            .find_map(|(entry, _, is_ignore_file)| is_ignore_file.then_some(entry))
+        {
+            match timing::time("walk.gitignore", || ignore_path.to_patterns()) {
+                Ok(mut ignore_patterns) => {
+                    ignore_patterns.extend(&walker.ignore_patterns);
+                    walker.ignore_patterns = Arc::new(ignore_patterns);
                 }
-            })
-            .filter(|(entry, file_type)| !walker.is_excluded(entry, file_type.is_dir()))
+                Err(e) => error!(
+                    "Failed to process path '{}': {:?}",
+                    ignore_path.display(),
+                    e
+                ),
+            }
+        }
+        let mut entries: Vec<_> = entries
+            .into_iter()
+            .filter(|(_, _, is_ignore_file)| !is_ignore_file)
+            .filter(|(entry, file_type, _)| !walker.is_excluded(entry, file_type.is_dir()))
+            .map(|(entry, file_type, _)| (entry, file_type))
             .collect();
         entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         for (path, file_type) in entries {
