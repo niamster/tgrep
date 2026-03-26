@@ -3,7 +3,6 @@ use std::{
     fs::{self, DirEntry},
     io,
     path::{Path, PathBuf},
-    rc::Rc,
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
 };
@@ -15,14 +14,17 @@ use log::{debug, error, info, warn};
 use crate::utils::display::Display;
 use crate::utils::filters::Filters;
 use crate::utils::grep::Grep;
-use crate::utils::lines::Zero;
+use crate::utils::lines::{OwnedLinesReader, Zero};
 use crate::utils::mapped::Mapped;
 use crate::utils::matcher::Matcher;
 use crate::utils::patterns::{Patterns, ToPatterns};
+use crate::utils::prefilter::LiteralPrefilter;
+use crate::utils::timing;
 use crate::utils::writer::BufferedWriter;
 
 static GIT_IGNORE: &str = ".gitignore";
 pub const GIT_DIR: &str = ".git";
+const SMALL_FILE_PREFILTER_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub struct Walker {
@@ -35,7 +37,8 @@ pub struct Walker {
     ignore_symlinks: bool,
     display: Arc<dyn Display>,
     print_file_separator: bool,
-    file_separator_printed: Rc<AtomicBool>,
+    file_separator_printed: Arc<AtomicBool>,
+    prefilter: Option<LiteralPrefilter>,
 }
 
 pub struct WalkerBuilder(Walker);
@@ -75,6 +78,11 @@ impl WalkerBuilder {
         self
     }
 
+    pub fn prefilter(mut self, prefilter: LiteralPrefilter) -> WalkerBuilder {
+        self.0.prefilter = Some(prefilter);
+        self
+    }
+
     pub fn build(self) -> Walker {
         self.0
     }
@@ -93,6 +101,7 @@ impl Walker {
             display,
             print_file_separator: false,
             file_separator_printed: Default::default(),
+            prefilter: None,
         }
     }
 
@@ -101,17 +110,19 @@ impl Walker {
     }
 
     fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
-        let path = path.to_str().unwrap();
-        let skip = self.force_ignore_patterns.is_excluded(path, is_dir);
-        if skip {
-            info!("Skipping [forced] {:?}", path);
-            return true;
-        }
-        let skip = self.ignore_patterns.is_excluded(path, is_dir);
-        if skip {
-            info!("Skipping {:?}", path);
-        }
-        skip
+        timing::time("walk.exclude", || {
+            let path = path.to_str().unwrap();
+            let skip = self.force_ignore_patterns.is_excluded(path, is_dir);
+            if skip {
+                info!("Skipping [forced] {:?}", path);
+                return true;
+            }
+            let skip = self.ignore_patterns.is_excluded(path, is_dir);
+            if skip {
+                info!("Skipping {:?}", path);
+            }
+            skip
+        })
     }
 
     fn process_gitignore(path: &Path) -> Option<Patterns> {
@@ -120,7 +131,7 @@ impl Walker {
             ifile.push(GIT_IGNORE);
             ifile
         };
-        match ifile.to_patterns() {
+        match timing::time("walk.gitignore", || ifile.to_patterns()) {
             Ok(ignore_patterns) => Some(ignore_patterns),
             Err(e) => {
                 match e.downcast_ref::<io::Error>() {
@@ -139,7 +150,7 @@ impl Walker {
     }
 
     fn walk_dir(&self, path: &Path, parents: &[PathBuf]) {
-        let walker = {
+        let mut walker = {
             let mut walker = self.clone();
             if let Some(mut ignore_patterns) = Self::process_gitignore(path) {
                 ignore_patterns.extend(&walker.ignore_patterns);
@@ -151,18 +162,43 @@ impl Walker {
         let mut to_dive = Vec::new();
         let mut to_grep = Vec::new();
 
-        let mut entries: Vec<_> = fs::read_dir(path)
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| !self.is_ignore_file(entry))
-            .filter_map(|entry| match entry.file_type() {
-                Ok(file_type) => Some((entry.path(), file_type)),
-                Err(e) => {
-                    error!("Failed to get path '{}' file type: {}", path.display(), e);
-                    None
+        let entries: Vec<_> = timing::time("walk.read_dir", || {
+            fs::read_dir(path)
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| match entry.file_type() {
+                    Ok(file_type) => {
+                        let is_ignore_file = self.is_ignore_file(&entry);
+                        Some((entry.path(), file_type, is_ignore_file))
+                    }
+                    Err(e) => {
+                        error!("Failed to get path '{}' file type: {}", path.display(), e);
+                        None
+                    }
+                })
+                .collect()
+        });
+        if let Some(ignore_path) = entries
+            .iter()
+            .find_map(|(entry, _, is_ignore_file)| is_ignore_file.then_some(entry))
+        {
+            match timing::time("walk.gitignore", || ignore_path.to_patterns()) {
+                Ok(mut ignore_patterns) => {
+                    ignore_patterns.extend(&walker.ignore_patterns);
+                    walker.ignore_patterns = Arc::new(ignore_patterns);
                 }
-            })
-            .filter(|(entry, file_type)| !walker.is_excluded(entry, file_type.is_dir()))
+                Err(e) => error!(
+                    "Failed to process path '{}': {:?}",
+                    ignore_path.display(),
+                    e
+                ),
+            }
+        }
+        let mut entries: Vec<_> = entries
+            .into_iter()
+            .filter(|(_, _, is_ignore_file)| !is_ignore_file)
+            .filter(|(entry, file_type, _)| !walker.is_excluded(entry, file_type.is_dir()))
+            .map(|(entry, file_type, _)| (entry, file_type))
             .collect();
         entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         for (path, file_type) in entries {
@@ -188,25 +224,63 @@ impl Walker {
         self.grep_many(&to_grep);
     }
 
-    fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
-        let len = fs::metadata(entry.as_path())
+    fn grep(
+        grep: Grep,
+        entry: Arc<PathBuf>,
+        matcher: Matcher,
+        display: Arc<dyn Display>,
+        prefilter: Option<LiteralPrefilter>,
+    ) {
+        let len = timing::time("file.metadata", || fs::metadata(entry.as_path()))
             .ok()
             .map(|meta| meta.len() as usize);
         if matches!(len, Some(0)) {
-            (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
+            timing::time("grep.total", || {
+                (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display)
+            });
             return;
         }
-        match len.and_then(|len| Mapped::new(&entry, len).ok()) {
+        if let (Some(len), Some(prefilter)) = (len, prefilter.as_ref()) {
+            if len <= SMALL_FILE_PREFILTER_LIMIT {
+                match timing::time("file.read_small", || fs::read(entry.as_path())) {
+                    Ok(content) => {
+                        if timing::time("file.prefilter", || !prefilter.matches(&content)) {
+                            return;
+                        }
+                        if timing::time("file.inspect_binary", || {
+                            content_inspector::inspect(&content).is_binary()
+                        }) {
+                            debug!("Skipping binary file '{}'", entry.display());
+                            return;
+                        }
+                        let reader = Arc::new(OwnedLinesReader::new((*entry).clone(), content));
+                        timing::time("grep.total", || (grep)(reader, matcher, display));
+                        return;
+                    }
+                    Err(e) => {
+                        debug!("Failed to read '{}' for prefilter: {}", entry.display(), e)
+                    }
+                }
+            }
+        }
+        match len.and_then(|len| timing::time("file.mmap", || Mapped::new(&entry, len).ok())) {
             Some(mapped) => {
-                if content_inspector::inspect(&mapped).is_binary() {
+                if prefilter.as_ref().is_some_and(|prefilter| {
+                    timing::time("file.prefilter", || !prefilter.matches(&mapped))
+                }) {
+                    return;
+                }
+                if timing::time("file.inspect_binary", || {
+                    content_inspector::inspect(&mapped).is_binary()
+                }) {
                     debug!("Skipping binary file '{}'", entry.display());
                     return;
                 }
-                (grep)(Arc::new(mapped), matcher, display);
+                timing::time("grep.total", || (grep)(Arc::new(mapped), matcher, display));
             }
             None => {
                 warn!("Failed to map file '{}'", entry.display());
-                (grep)(entry, matcher, display);
+                timing::time("grep.total", || (grep)(entry, matcher, display));
             }
         }
     }
@@ -220,9 +294,10 @@ impl Walker {
             let matcher = self.matcher.clone();
             let writer = Arc::new(BufferedWriter::new());
             let display = self.display.with_writer(writer.clone());
+            let prefilter = self.prefilter.clone();
             writers.push(writer);
             if entries.len() < 3 {
-                Walker::grep(self.grep.clone(), entry, matcher, display);
+                Walker::grep(self.grep.clone(), entry, matcher, display, prefilter);
                 continue;
             }
             match &self.tpool {
@@ -230,11 +305,11 @@ impl Walker {
                     let grep = self.grep.clone();
                     let wg = wg.clone();
                     tpool.spawn_ok(async move {
-                        Walker::grep(grep, entry, matcher, display);
+                        Walker::grep(grep, entry, matcher, display, prefilter);
                         drop(wg);
                     });
                 }
-                None => Walker::grep(self.grep.clone(), entry, matcher, display),
+                None => Walker::grep(self.grep.clone(), entry, matcher, display, prefilter),
             }
         }
         wg.wait();
@@ -315,6 +390,7 @@ impl Walker {
                 Arc::new(path.to_path_buf()),
                 self.matcher.clone(),
                 self.display.clone(),
+                self.prefilter.clone(),
             );
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {

@@ -7,6 +7,7 @@ use log::error;
 use crate::utils::display::{Display, DisplayContext};
 use crate::utils::lines::LinesReader;
 use crate::utils::matcher::{Match, Matcher, MatcherOptions};
+use crate::utils::timing;
 
 pub type Grep = Arc<Box<dyn Fn(Arc<dyn LinesReader>, Matcher, Arc<dyn Display>) + Send + Sync>>;
 
@@ -14,13 +15,16 @@ type OnMatch = Box<dyn Fn(DisplayContext) -> bool>;
 type OnEnd = Box<dyn Fn(usize, usize)>;
 
 fn fuzzy_grep(reader: &Arc<dyn LinesReader>, matcher: &Matcher) -> Option<()> {
-    let res = reader.map();
+    let res = timing::time("reader.map", || reader.map());
     if res.is_err() {
         // Some readers do not support map
         return Some(());
     }
-    res.ok()
-        .and_then(|map| matcher(map, MatcherOptions::Fuzzy).and(Some(())))
+    res.ok().and_then(|map| {
+        timing::time("grep.fuzzy", || {
+            matcher(map, MatcherOptions::Fuzzy).and(Some(()))
+        })
+    })
 }
 
 fn generic_grep(reader: Arc<dyn LinesReader>, matcher: Matcher, on_match: OnMatch, on_end: OnEnd) {
@@ -30,13 +34,17 @@ fn generic_grep(reader: Arc<dyn LinesReader>, matcher: Matcher, on_match: OnMatc
     }
     let mut matches = 0;
     let mut total = 0;
-    match reader.lines() {
+    match timing::time("reader.lines", || reader.lines()) {
         Ok(mut lines) => {
             while let Some(line) = lines.next() {
                 total += 1;
-                if let Some(needle) = matcher(line, MatcherOptions::Exact(usize::MAX)) {
+                if let Some(needle) = timing::time("grep.exact", || {
+                    matcher(line, MatcherOptions::Exact(usize::MAX))
+                }) {
                     matches += 1;
-                    if on_match(DisplayContext::new(total, line.to_string(), needle)) {
+                    if timing::time("display.match", || {
+                        on_match(DisplayContext::new(total, line.to_string(), needle))
+                    }) {
                         break;
                     }
                 }
@@ -114,10 +122,10 @@ fn _grep_with_context(
             let mut plno = 0;
             for (lno, context) in output {
                 if plno > 0 && lno - plno > 1 {
-                    display.match_separator();
+                    timing::time("display.separator", || display.match_separator());
                 }
                 plno = lno;
-                display.display(&path, Some(context));
+                timing::time("display.match", || display.display(&path, Some(context)));
             }
         }
         Err(e) => error!("Failed to read '{}': {}", reader.path().display(), e),
