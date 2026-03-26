@@ -242,6 +242,7 @@ Implication:
 
 - a classify layer is still the right long-term direction
 - but it must be introduced on top of a better file-processing base, not layered naively over the original `metadata -> map -> inspect -> grep` flow
+- for a repository that is mostly text, prefix-only classification is not a strong standalone optimization unless it replaces enough downstream work
 
 Revised guidance:
 
