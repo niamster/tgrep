@@ -334,10 +334,7 @@ mod tests {
 
     fn display(format: Format, writer: Arc<dyn Writer>) -> Arc<dyn Display> {
         let path_format: PathFormat = Arc::new(Box::new(|path: &Path| {
-            path.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
+            path.file_name().unwrap().to_string_lossy().into_owned()
         }));
         Arc::new(DisplayTerminal::new(120, format, path_format, writer))
     }
