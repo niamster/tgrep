@@ -22,9 +22,9 @@ pub struct Mapped {
 }
 
 impl Mapped {
-    pub fn new(path: &Path, len: usize) -> anyhow::Result<Self> {
+    pub fn new(path: &Path) -> anyhow::Result<Self> {
         let file = fs::File::open(path)?;
-        let mmap = unsafe { MmapOptions::new().len(len).map(&file)? };
+        let mmap = unsafe { MmapOptions::new().map(&file)? };
         Ok(Mapped {
             mapped: Rc::new(MappedInner {
                 path: path.to_owned(),

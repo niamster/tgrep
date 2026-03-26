@@ -94,38 +94,3 @@ where
         }
     }
 }
-
-#[derive(Clone, PartialOrd, PartialEq, Ord, Eq)]
-pub struct Zero {
-    path: PathBuf,
-}
-
-impl Zero {
-    pub fn new(path: PathBuf) -> Self {
-        Zero { path }
-    }
-}
-
-impl LinesReader for Zero {
-    fn map(&self) -> anyhow::Result<&str> {
-        Ok("")
-    }
-
-    fn lines(&self) -> anyhow::Result<Box<LineIterator>> {
-        Ok(Box::new(self.clone()))
-    }
-
-    fn path(&self) -> &PathBuf {
-        &self.path
-    }
-}
-
-impl StreamingIterator for Zero {
-    type Item = str;
-
-    fn advance(&mut self) {}
-
-    fn get(&self) -> Option<&Self::Item> {
-        None
-    }
-}

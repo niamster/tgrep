@@ -31,27 +31,34 @@ impl Writer for StdoutWriter {
 
 #[derive(Clone)]
 pub struct BufferedWriter {
-    lines: Arc<Mutex<RefCell<Vec<String>>>>,
+    lines: Arc<Mutex<RefCell<Option<Vec<String>>>>>,
 }
 
 impl BufferedWriter {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         BufferedWriter {
-            lines: Arc::new(Mutex::new(RefCell::new(Vec::new()))),
+            lines: Arc::new(Mutex::new(RefCell::new(None))),
         }
     }
 
     pub fn flush(&self, writer: &Arc<dyn Writer>) {
         let lines = self.lines.lock().unwrap();
         let lines = lines.borrow();
-        for line in lines.iter() {
-            writer.write(line);
+        if let Some(lines) = &*lines {
+            for line in lines.iter() {
+                writer.write(line);
+            }
         }
     }
 
     pub fn has_some(&self) -> bool {
-        self.lines.lock().unwrap().borrow().len() > 0
+        self.lines
+            .lock()
+            .unwrap()
+            .borrow()
+            .as_ref()
+            .is_some_and(|lines| !lines.is_empty())
     }
 }
 
@@ -59,6 +66,8 @@ impl Writer for BufferedWriter {
     fn write(&self, content: &str) {
         let lines = self.lines.lock().unwrap();
         let mut lines = lines.borrow_mut();
-        lines.push(content.to_owned());
+        lines
+            .get_or_insert_with(Vec::new)
+            .push(content.to_owned());
     }
 }
