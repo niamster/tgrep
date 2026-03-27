@@ -286,11 +286,23 @@ Remove the `fs::metadata()` call in `Walker::grep()`. Instead of passing a pre-c
 
 In `walk_dir`, check for `.gitignore` existence before cloning the walker. When no `.gitignore` is found (the common case in deep subtrees), reuse `self` directly instead of cloning and re-wrapping `ignore_patterns` in a new `Arc`.
 
-### O4. Parallel directory traversal
+### O4. Parallel directory traversal — requires structural redesign
 
-Submit subdirectory walks to the thread pool instead of processing them sequentially. This is the single highest-impact change available within the current architecture — the benchmark data shows the wall-clock gap with `rg` is almost entirely due to traversal parallelism.
+Attempted: parallelize subdirectory walks using `std::thread::scope` with a depth limit, buffering each subtree's output in a `BufferedWriter` and flushing in sorted order.
 
-This requires care around output ordering (the current `grep_many` + `BufferedWriter` flush model assumes a single directory's files are processed together), but a sequence-number approach can be introduced incrementally.
+Results (no-match large-tree workload, on top of O1–O3 baseline of 11.93s):
+
+| Approach | Wall time | User | System |
+|----------|-----------|------|--------|
+| O1–O3 (sequential walk) | 11.93s | 2.47s | 45.19s |
+| O4 depth=3 | 14.16s | 3.26s | 31.44s |
+| O4 depth=1 | 13.07s | 2.69s | 29.21s |
+
+Both parallel walk variants regressed wall time despite reducing total system time. The root cause is that `std::thread::scope` imposes synchronization barriers at each directory level — the parent must wait for ALL children before continuing. This limits effective parallelism and adds OS thread creation/joining overhead that outweighs the benefit.
+
+Additionally, the `futures::executor::ThreadPool` cannot be used for recursive directory spawning (causes thread pool starvation deadlock), forcing the use of OS threads.
+
+Conclusion: parallel directory traversal cannot be bolt-on to the current recursive `walk_dir` architecture. It requires a producer-consumer design where the walk emits file paths into a shared work queue and independent worker threads consume them — which is the Track 2 redesign (specifically, `ignore::WalkBuilder::build_parallel()` or equivalent).
 
 ### O5. Literal pre-filter bypass
 
@@ -402,13 +414,13 @@ Not rejected in principle, but too large and risky as a single change. Increment
 
 Two-track approach:
 
-**Track 1 — targeted fixes (O1–O6):** Apply the pre-redesign optimizations first. These are low-risk, independently benchmarkable, and may close a meaningful portion of the gap with `rg`. In particular, O4 (parallel directory traversal) addresses the dominant bottleneck identified by the system-time analysis.
+**Track 1 — targeted fixes (O1–O3, O5–O6):** O1 (release profile), O2 (eliminate redundant stat), and O3 (skip walker clone) are implemented and reduce wall time from 13.92s to 11.93s (~14% improvement). O5 (literal pre-filter) and O6 (parents Vec) remain as further incremental opportunities.
 
-**Track 2 — staged redesign:** If Track 1 leaves a significant gap, proceed with the full architectural migration:
+O4 (parallel directory traversal) was attempted and confirmed to require structural redesign — it cannot be effectively bolted onto the current recursive `walk_dir` architecture.
 
-1. walker replacement (`ignore::WalkBuilder`)
+**Track 2 — staged redesign:** The remaining ~30% gap with `rg` (11.93s vs 9.09s) requires the full architectural migration:
+
+1. walker replacement (`ignore::WalkBuilder`) — this is now the clear first priority, as it provides parallel traversal via a producer-consumer design rather than recursive thread spawning
 2. classify layer on top of the stronger combined file path
 3. split literal and regex search engines
 4. ordered result buffering by sequence id
-
-Track 1 results will also inform Track 2 priorities — if parallel traversal alone closes most of the gap, the classify layer becomes less urgent than the search engine split.
