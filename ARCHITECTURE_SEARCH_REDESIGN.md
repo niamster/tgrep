@@ -410,17 +410,35 @@ Not rejected in principle, but too large and risky as a single change. Increment
 - higher implementation complexity
 - temporary coexistence of old and new paths during migration
 
+## Experiment Results
+
+### Track 1 (O1–O6)
+
+All Track 1 optimizations were implemented and benchmarked. A/B testing with hyperfine against the pre-optimization baseline (same cache state, same machine) showed:
+
+| Variant | Wall time | User | System |
+|---------|-----------|------|--------|
+| Baseline (pre-O1) | 14.22s | 2.68s | 31.32s |
+| O1–O3 | 14.22s | 2.46s | 34.62s |
+| O1–O3+O5+O6 | 14.52s | 2.45s | 29.25s |
+
+O1–O3 reduce user-space CPU time by ~8% (LTO + fewer syscalls + fewer clones), but wall time is unchanged because this workload is I/O-bound. O5 (literal pre-filter) provides no benefit — the regex engine already uses literal optimizations internally. O6 (parents Vec reallocation) is negligible.
+
+O4 (parallel directory traversal) regressed wall time when attempted via `std::thread::scope` (see above).
+
+Earlier measurements showing ~14% improvement from O1–O3 were artifacts of filesystem cache warming, not code changes.
+
+### Conclusion
+
+O1–O3 are kept as code quality improvements (cleaner APIs, less redundant work, better release builds) but they do not close the gap with `rg` on this I/O-bound workload. O5–O6 are dropped as they add complexity without measurable benefit.
+
 ## Recommendation
 
-Two-track approach:
+The gap with `rg` (~14s vs ~9s) is entirely structural and requires the Track 2 architectural migration:
 
-**Track 1 — targeted fixes (O1–O3, O5–O6):** O1 (release profile), O2 (eliminate redundant stat), and O3 (skip walker clone) are implemented and reduce wall time from 13.92s to 11.93s (~14% improvement). O5 (literal pre-filter) and O6 (parents Vec) remain as further incremental opportunities.
-
-O4 (parallel directory traversal) was attempted and confirmed to require structural redesign — it cannot be effectively bolted onto the current recursive `walk_dir` architecture.
-
-**Track 2 — staged redesign:** The remaining ~30% gap with `rg` (11.93s vs 9.09s) requires the full architectural migration:
-
-1. walker replacement (`ignore::WalkBuilder`) — this is now the clear first priority, as it provides parallel traversal via a producer-consumer design rather than recursive thread spawning
+1. walker replacement (`ignore::WalkBuilder`) — this is the clear first priority, as it provides parallel traversal via a producer-consumer design rather than recursive thread spawning
 2. classify layer on top of the stronger combined file path
 3. split literal and regex search engines
 4. ordered result buffering by sequence id
+
+Track 1 micro-optimizations have been exhausted. No further local tuning can close the gap.
