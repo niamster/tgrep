@@ -11,12 +11,27 @@ The strongest clean-branch result so far combined:
 
 That improved a representative no-match large-tree workload from roughly `23.42s` to roughly `22.19s`.
 
-The conclusion is that local tuning has mostly reached diminishing returns. The remaining cost is dominated by the core per-file processing pipeline:
+### Benchmark Baseline (2026-03-27)
+
+A fresh benchmark on the post-PR-19 codebase against a large monorepo subtree (~hundreds of thousands of files) with pattern `foooxxxyyy` (no matches, exercises traversal + open + fuzzy-reject hot path):
+
+| Tool  | Wall time | User  | System  |
+|-------|-----------|-------|---------|
+| tgrep | 13.92s    | 2.62s | 37.97s  |
+| rg    | 9.09s     | 1.34s | 91.39s  |
+
+Key takeaway: `rg` is ~1.5x faster wall-clock despite using ~2.4x more total system time. This means `rg` wins almost entirely through **parallelism** — it issues far more concurrent syscalls across threads. `tgrep`'s user-space time is already low; the bottleneck is sequential syscall throughput, not CPU work.
+
+### Conclusion
+
+Local tuning has mostly reached diminishing returns. The remaining cost is dominated by the core per-file processing pipeline:
 
 - open file
 - classify text vs binary
 - read or map file contents
 - search contents
+
+And critically, by the **sequential traversal of directories**, which serializes the syscall-heavy pipeline.
 
 This note proposes a structural redesign for that pipeline.
 
@@ -24,7 +39,7 @@ This note proposes a structural redesign for that pipeline.
 
 ### 1. Traversal, classification, search, and output are tightly coupled
 
-In the current code, [src/utils/walker.rs](/Users/dmytro.milinevskyi/dev/tgrep/src/utils/walker.rs) is responsible for:
+In the current code, `src/utils/walker.rs` is responsible for:
 
 - recursive traversal
 - `.gitignore` handling
@@ -55,6 +70,26 @@ Line extraction is appropriate for rendering results, but it is not the best pri
 ### 4. Sorted output constrains concurrency
 
 The current design keeps output deterministic, but traversal and execution are not cleanly separated from ordering. That limits opportunities for deeper parallelism.
+
+### 5. Double stat per file
+
+`walk_dir` calls `entry.file_type()` on each directory entry, then `grep()` calls `fs::metadata()` again on the same path to obtain the file size for `mmap`. On macOS, `file_type()` reads from the dirent structure (no extra syscall), but `metadata()` is a full `stat()`. Since `Mapped::new` could let `mmap` auto-detect the file size from the fd's `fstat` (issued internally by the kernel during `mmap`), the explicit `metadata()` call is redundant.
+
+### 6. Sequential directory traversal
+
+`walk_dir` processes subdirectories in a sequential loop. Only files within a single directory are parallelized via `grep_many`. The benchmark confirms this: `rg` achieves 91s of system time (many concurrent syscalls across threads) vs `tgrep`'s 38s. The wall-clock gap is almost entirely explained by this difference in traversal parallelism.
+
+### 7. Walker clone and gitignore probe on every directory
+
+`walk_dir` clones the `Walker` struct and attempts to open `.gitignore` on every directory entry, even when no `.gitignore` exists. The clone itself is cheap (Arc reference bumps), but the failed file open is a wasted syscall per directory.
+
+### 8. Regex engine used for literal fuzzy pre-check
+
+`fuzzy_grep` calls `regexp.shortest_match(map)` to pre-filter files before line iteration. For a literal pattern like `foooxxxyyy`, this runs the full regex engine over the entire mmap'd content. A `memmem`-based literal search (already available in `patterns.rs` via libc FFI) would be faster for this common case.
+
+### 9. No release profile tuning
+
+`Cargo.toml` has no `[profile.release]` section. The default release profile uses incremental LTO and 16 codegen units. Adding `lto = true` and `codegen-units = 1` can yield measurable improvements with zero code changes.
 
 ## Decision
 
@@ -227,6 +262,44 @@ Target runtime flow:
 5. results are buffered by sequence number
 6. renderer flushes in deterministic order
 
+## Pre-Redesign Optimizations
+
+Before committing to the full staged redesign, several targeted fixes can reduce the gap with `rg` within the existing architecture. These are worth doing first because they are low-risk, independently valuable, and inform whether the full redesign is necessary.
+
+### O1. Release profile tuning
+
+Add to `Cargo.toml`:
+
+```toml
+[profile.release]
+lto = true
+codegen-units = 1
+```
+
+Expected impact: small but free. Tighter inlining across crate boundaries, especially for the `memchr`, `regex`, and `content_inspector` hot paths.
+
+### O2. Eliminate redundant metadata syscall
+
+Remove the `fs::metadata()` call in `Walker::grep()`. Instead of passing a pre-computed `len` to `Mapped::new`, let `MmapOptions` derive the file size from the fd (which it does internally via `fstat` when no explicit length is set). This eliminates one `stat()` per file.
+
+### O3. Skip Walker clone when no .gitignore
+
+In `walk_dir`, check for `.gitignore` existence before cloning the walker. When no `.gitignore` is found (the common case in deep subtrees), reuse `self` directly instead of cloning and re-wrapping `ignore_patterns` in a new `Arc`.
+
+### O4. Parallel directory traversal
+
+Submit subdirectory walks to the thread pool instead of processing them sequentially. This is the single highest-impact change available within the current architecture — the benchmark data shows the wall-clock gap with `rg` is almost entirely due to traversal parallelism.
+
+This requires care around output ordering (the current `grep_many` + `BufferedWriter` flush model assumes a single directory's files are processed together), but a sequence-number approach can be introduced incrementally.
+
+### O5. Literal pre-filter bypass
+
+When the pattern compiles to a pure literal (no regex metacharacters), use `memmem` (already available via libc FFI in `patterns.rs`) instead of `regexp.shortest_match()` for the fuzzy pre-check in `generic_grep`. This avoids regex engine overhead on the most common case for the no-match workload.
+
+### O6. Avoid parents Vec reallocation
+
+Replace the `parents.to_owned()` + push pattern in `walk_dir` with a stack-like structure or pass a reference to a shared growable buffer, avoiding a full `Vec<PathBuf>` clone at every directory level.
+
 ## Migration Plan
 
 ### Prototype Findings
@@ -327,13 +400,15 @@ Not rejected in principle, but too large and risky as a single change. Increment
 
 ## Recommendation
 
-Stop pursuing isolated local micro-optimizations as the main strategy.
+Two-track approach:
 
-Use the current best-performing branch as a reference point, then start a staged redesign with:
+**Track 1 — targeted fixes (O1–O6):** Apply the pre-redesign optimizations first. These are low-risk, independently benchmarkable, and may close a meaningful portion of the gap with `rg`. In particular, O4 (parallel directory traversal) addresses the dominant bottleneck identified by the system-time analysis.
 
-1. walker replacement
-2. classify layer on top of the stronger combined file path, not the original baseline
-3. split search engines
-4. ordered result buffering
+**Track 2 — staged redesign:** If Track 1 leaves a significant gap, proceed with the full architectural migration:
 
-That is the most credible path to a materially faster `tgrep`.
+1. walker replacement (`ignore::WalkBuilder`)
+2. classify layer on top of the stronger combined file path
+3. split literal and regex search engines
+4. ordered result buffering by sequence id
+
+Track 1 results will also inform Track 2 priorities — if parallel traversal alone closes most of the gap, the classify layer becomes less urgent than the search engine split.
