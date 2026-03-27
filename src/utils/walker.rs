@@ -139,13 +139,18 @@ impl Walker {
     }
 
     fn walk_dir(&self, path: &Path, parents: &[PathBuf]) {
-        let walker = {
-            let mut walker = self.clone();
-            if let Some(mut ignore_patterns) = Self::process_gitignore(path) {
-                ignore_patterns.extend(&walker.ignore_patterns);
-                walker.ignore_patterns = Arc::new(ignore_patterns);
+        let owned_walker;
+        let walker = match Self::process_gitignore(path) {
+            Some(mut ignore_patterns) => {
+                owned_walker = {
+                    let mut w = self.clone();
+                    ignore_patterns.extend(&w.ignore_patterns);
+                    w.ignore_patterns = Arc::new(ignore_patterns);
+                    w
+                };
+                &owned_walker
             }
-            walker
+            None => self,
         };
 
         let mut to_dive = Vec::new();
