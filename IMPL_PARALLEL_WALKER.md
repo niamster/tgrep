@@ -4,9 +4,9 @@
 
 Benchmarks show tgrep at ~14s vs rg at ~9s on a large monorepo no-match workload. A/B testing confirmed the gap is entirely structural — the custom sequential recursive walker in `walker.rs` (362 lines) plus the hand-rolled .gitignore parser in `patterns.rs` (514 lines) cannot match the parallel traversal of the `ignore` crate (same crate rg uses). All Track 1 micro-optimizations have been exhausted.
 
-## Approach: parallel walk with collect-and-sort ordering
+## Approach: parallel walk with compatibility-preserving ordering
 
-Replace the recursive `Walker` with `ignore::WalkBuilder::build_parallel()`. The parallel walker dispatches files to worker threads. Each thread greps the file and buffers output. After the walk completes, results are sorted by path and flushed to stdout — preserving deterministic output.
+Replace the recursive `Walker` with `ignore::WalkBuilder::build_parallel()`. The parallel walker dispatches files to worker threads. Each thread greps the file and buffers output. Output remains deterministic, but ordering must be preserved by stable sequence numbers assigned at discovery time, not by a global post-hoc path sort.
 
 The `futures::executor::ThreadPool` is removed — `ignore`'s parallel walker already provides file-level parallelism, making the separate pool redundant.
 
@@ -16,8 +16,8 @@ The `futures::executor::ThreadPool` is removed — `ignore`'s parallel walker al
 |------|--------|
 | `Cargo.toml` | Add `ignore = "0.4"`, remove `futures`, `crossbeam` |
 | `src/utils.rs` | Remove `walker`, `filters`, add `parallel_walker` |
-| `src/utils/parallel_walker.rs` | **New** — parallel walk + collect-and-sort output |
-| `src/main.rs` | Rewire to use `ParallelWalker`, translate filters/ignore to `ignore` overrides |
+| `src/utils/parallel_walker.rs` | **New** — parallel walk + buffered ordered flush |
+| `src/main.rs` | Rewire to use `ParallelWalker`, translate filters/ignore carefully to `ignore` primitives |
 | `src/utils/walker.rs` | **Delete** |
 | `src/utils/filters.rs` | **Delete** |
 | `src/utils/grep.rs` | Extract `grep_file` from `Walker::grep` (open, mmap, binary check, dispatch) |
@@ -59,7 +59,7 @@ Core structure:
 
 ```rust
 struct FileResult {
-    path: PathBuf,
+    seq: u64,
     output: Vec<String>,
 }
 
@@ -68,8 +68,8 @@ pub fn parallel_walk(
     grep: Grep,
     matcher: Matcher,
     display: Arc<dyn Display>,
-    overrides: Override,        // replaces force_ignore + file_filters
-    follow_links: bool,        // replaces !ignore_symlinks
+    overrides: Override,
+    follow_links: bool,
     print_file_separator: bool,
 ) {
     let results: Arc<Mutex<Vec<FileResult>>> = Arc::new(Mutex::new(Vec::new()));
@@ -97,12 +97,13 @@ pub fn parallel_walk(
                     return WalkState::Continue;
                 }
                 let path = entry.into_path();
+                let seq = next_seq.fetch_add(1, Ordering::Relaxed);
                 let writer = Arc::new(BufferedWriter::new());
                 let file_display = display.with_writer(writer.clone());
                 grep_file(&grep, &path, &matcher, &file_display);
                 if writer.has_some() {
                     results.lock().unwrap().push(FileResult {
-                        path,
+                        seq,
                         output: writer.take(),
                     });
                 }
@@ -111,9 +112,9 @@ pub fn parallel_walk(
         });
     }
 
-    // Sort and flush
+    // Sort and flush in compatibility order
     let mut results = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
-    results.sort_by(|a, b| a.path.cmp(&b.path));
+    results.sort_by_key(|result| result.seq);
     let writer = display.writer();
     for (i, result) in results.iter().enumerate() {
         if print_file_separator && i > 0 { display.file_separator(); }
@@ -124,7 +125,7 @@ pub fn parallel_walk(
 }
 ```
 
-### Step 3: Translate filter/ignore patterns to `ignore::overrides`
+### Step 3: Translate filter/ignore patterns to `ignore` primitives with parity checks
 
 In `main.rs`, build `Override` from existing CLI args:
 
@@ -145,16 +146,27 @@ let overrides = override_builder.build()?;
 
 `.git/` force-ignore is unnecessary — `ignore` crate handles it natively.
 
+However, this translation is not "mechanical" until parity is proven. The current code combines:
+
+- parent `.gitignore` discovery
+- per-root forced excludes
+- separate file-filter matching
+- explicit path handling
+
+So this step needs focused tests for `-e`, `-f`, `-t`, nested `.gitignore`, and multiple roots before the old code is deleted.
+
 ### Step 4: Update `main.rs` wiring
 
 Replace the `for path in paths` loop body:
 
-- Remove `Walker::find_ignore_patterns_in_parents` (handled by `WalkBuilder::parents(true)`)
+- Remove `Walker::find_ignore_patterns_in_parents` only after confirming `WalkBuilder::parents(true)` matches current repository-root behavior
 - Remove `Patterns::new` and `Filters::new` (replaced by overrides)
 - Remove `WalkerBuilder` construction
 - Call `parallel_walk(...)` instead
 - Keep the `path_format` / display construction (still needed for output formatting)
 - Keep the stdin handling block
+
+Symlink behavior is not a free replacement. The current walker also canonicalizes symlinks, detects loops, and avoids descending into already-covered parent trees. If `ignore` does not match that behavior directly, keep a thin compatibility layer instead of silently changing traversal semantics.
 
 ### Step 5: Add `BufferedWriter::take` method
 
@@ -182,9 +194,9 @@ pub fn take(&self) -> Vec<String> {
 
 ## Key design decisions
 
-### Why collect-and-sort (not streaming)?
+### Why buffered ordered flush (not global path-sort)?
 
-For the no-match workload (the optimization target), there are zero results to buffer — memory cost is nil. For match-heavy workloads, memory is proportional to total output size, which is bounded by what would be printed anyway. A sequence-number priority queue is a future optimization if memory becomes a concern.
+For the no-match workload (the optimization target), there are zero results to buffer, so memory cost is nil. For match-heavy workloads, memory is proportional to total output size, which is bounded by what would be printed anyway. A sequence-number priority queue is a future optimization if end-of-walk buffering becomes a concern.
 
 ### Why remove `futures::ThreadPool`?
 
@@ -194,9 +206,11 @@ With `ignore`'s parallel walker, each file is already dispatched to a worker thr
 
 Still used by `benches/patterns.rs`. Can be removed in a separate cleanup.
 
-### Output ordering change
+### Output ordering
 
-Current: deterministic, depth-first sorted within each directory level separately. New: deterministic, globally sorted by full path. These produce identical output for flat trees and are actually more consistent for deep trees (global sort vs per-level sort).
+Current: deterministic traversal-based ordering, including CLI root order.
+
+New: deterministic ordering must remain compatible with current behavior. A global full-path sort is simpler, but it is a behavior change and should not be treated as equivalent.
 
 ## Verification
 
@@ -204,5 +218,6 @@ Current: deterministic, depth-first sorted within each directory level separatel
 2. `cargo build --release` then:
    - `./target/release/tgrep foooxxxyyy ~/dd/dd-source/domains </dev/null` — completes, no hang
    - `hyperfine` A/B vs baseline binary
-3. Correctness: `diff` output against baseline binary — should match (modulo ordering improvement for deep trees)
+3. Correctness: `diff` output against baseline binary — should match exactly for representative trees, including nested dirs and multiple CLI roots
 4. Feature parity: test `-i`, `-v`, `-l`, `-L`, `-c`, `-A`/`-B`, `-e`, `-f`, `-t`, `--ignore-symlinks`
+5. Symlink parity: verify loop detection and ancestor-tree dedup behavior still match the current walker

@@ -87,9 +87,11 @@ The current design keeps output deterministic, but traversal and execution are n
 
 `fuzzy_grep` calls `regexp.shortest_match(map)` to pre-filter files before line iteration. For a literal pattern like `foooxxxyyy`, this runs the full regex engine over the entire mmap'd content. A `memmem`-based literal search (already available in `patterns.rs` via libc FFI) would be faster for this common case.
 
-### 9. No release profile tuning
+### 9. Remaining wins are structural, not profile-level
 
-`Cargo.toml` has no `[profile.release]` section. The default release profile uses incremental LTO and 16 codegen units. Adding `lto = true` and `codegen-units = 1` can yield measurable improvements with zero code changes.
+`Cargo.toml` already enables `lto = true` and `codegen-units = 1` in `[profile.release]`.
+
+That matters because it removes one obvious "free win" from the table: the remaining gap to `rg` is no longer plausibly explained by missing release-profile tuning. The remaining work is architectural: traversal parallelism, search-path specialization, and reducing unnecessary per-file setup.
 
 ## Decision
 
@@ -125,12 +127,14 @@ Recommended direction:
 - replace the custom recursive walker with `ignore::WalkBuilder`
 - assign a stable sequence number to every discovered file
 - emit `FileTask { seq, path }`
+- preserve current symlink behavior explicitly rather than assuming `follow_links(true)` is a drop-in replacement
 
 Why:
 
 - this aligns the traversal layer with the same family of tooling used by `rg`
 - it removes a large amount of custom ignore and recursion logic
 - it makes later parallelism easier
+- it keeps ordering semantics separate from execution semantics, which is required for safe parallelism
 
 ### 2. Classify Layer
 
@@ -165,6 +169,7 @@ Key design rule:
 
 - classification must be cheap
 - classification must reuse the same open handle or already-read bytes where possible
+- classification is an optimization stage, not a rendering stage; regex/context modes may still need a full downstream path
 
 This is the main architectural change that the experiments point toward.
 
@@ -210,6 +215,11 @@ This gives:
 - more freedom for parallel traversal and search
 - cleaner separation between execution and user-visible ordering
 
+Important constraint:
+
+- `seq` must represent compatibility order, not convenience order
+- global path-sort is not an equivalent replacement for today's behavior when multiple roots or symlinked trees are involved
+
 ### 5. Render Layer
 
 Responsibility:
@@ -246,6 +256,17 @@ One possible shape:
   - current display-oriented code can migrate here over time
 
 This does not need to happen in one rewrite, but it should be the target shape.
+
+## Compatibility Constraints
+
+Any redesign should preserve these user-visible behaviors unless the project explicitly chooses to change them:
+
+- multiple input roots are processed in CLI argument order
+- output remains deterministic under parallel execution
+- symlink traversal keeps the current loop and ancestor-duplication protections
+- `-e`, `-f`, `-t`, parent `.gitignore`, and explicit file arguments continue to compose correctly
+
+Those constraints should shape the implementation plan. They are not follow-up polish.
 
 ## Execution Flow
 
