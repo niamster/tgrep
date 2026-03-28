@@ -22,15 +22,18 @@ pub struct Mapped {
 }
 
 impl Mapped {
-    pub fn new(path: &Path, len: usize) -> anyhow::Result<Self> {
+    pub fn open(path: &Path) -> anyhow::Result<Option<Self>> {
         let file = fs::File::open(path)?;
-        let mmap = unsafe { MmapOptions::new().len(len).map(&file)? };
-        Ok(Mapped {
+        if file.metadata()?.len() == 0 {
+            return Ok(None);
+        }
+        let mmap = unsafe { MmapOptions::new().map(&file)? };
+        Ok(Some(Mapped {
             mapped: Arc::new(MappedInner {
                 path: path.to_owned(),
                 mmap,
             }),
-        })
+        }))
     }
 }
 
@@ -158,7 +161,7 @@ mod tests {
     #[test]
     fn mapped_reader_returns_lines() {
         let file = TempFile::new(b"alpha\nbeta\ngamma");
-        let mapped = Mapped::new(file.path(), 16).unwrap();
+        let mapped = Mapped::open(file.path()).unwrap().unwrap();
         let mut lines = mapped.lines().unwrap();
 
         assert_eq!(Some("alpha"), lines.next());
@@ -170,7 +173,7 @@ mod tests {
     #[test]
     fn mapped_reader_trims_cr_before_lf() {
         let file = TempFile::new(b"alpha\r\nbeta\r\n");
-        let mapped = Mapped::new(file.path(), 13).unwrap();
+        let mapped = Mapped::open(file.path()).unwrap().unwrap();
         let mut lines = mapped.lines().unwrap();
 
         assert_eq!(Some("alpha"), lines.next());
@@ -181,7 +184,7 @@ mod tests {
     #[test]
     fn mapped_reader_falls_back_for_invalid_utf8() {
         let file = TempFile::new(b"ok\nf\x80o\n");
-        let mapped = Mapped::new(file.path(), 7).unwrap();
+        let mapped = Mapped::open(file.path()).unwrap().unwrap();
         let mut lines = mapped.lines().unwrap();
 
         assert_eq!(Some("ok"), lines.next());

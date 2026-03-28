@@ -189,22 +189,18 @@ impl Walker {
     }
 
     fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
-        let len = fs::metadata(entry.as_path())
-            .ok()
-            .map(|meta| meta.len() as usize);
-        if matches!(len, Some(0)) {
-            (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
-            return;
-        }
-        match len.and_then(|len| Mapped::new(&entry, len).ok()) {
-            Some(mapped) => {
+        match Mapped::open(&entry) {
+            Ok(Some(mapped)) => {
                 if content_inspector::inspect(&mapped).is_binary() {
                     debug!("Skipping binary file '{}'", entry.display());
                     return;
                 }
                 (grep)(Arc::new(mapped), matcher, display);
             }
-            None => {
+            Ok(None) => {
+                (grep)(Arc::new(Zero::new((*entry).clone())), matcher, display);
+            }
+            Err(_) => {
                 warn!("Failed to map file '{}'", entry.display());
                 (grep)(entry, matcher, display);
             }
