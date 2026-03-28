@@ -151,8 +151,15 @@ impl Walker {
         let mut to_dive = Vec::new();
         let mut to_grep = Vec::new();
 
-        let mut entries: Vec<_> = fs::read_dir(path)
-            .unwrap()
+        let read_dir = match fs::read_dir(path) {
+            Ok(read_dir) => read_dir,
+            Err(e) => {
+                error!("Failed to read directory '{}': {}", path.display(), e);
+                return;
+            }
+        };
+
+        let mut entries: Vec<_> = read_dir
             .filter_map(|entry| entry.ok())
             .filter(|entry| !self.is_ignore_file(entry))
             .filter_map(|entry| match entry.file_type() {
@@ -359,6 +366,8 @@ impl Walker {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
@@ -594,5 +603,37 @@ mod tests {
         walker.walk(temp.path());
 
         assert_eq!(vec!["linked.txt"], writer.lines());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_skips_unreadable_directories_without_panicking() {
+        let temp = TempDir::new();
+        temp.write("visible.txt", b"visible\n");
+        temp.mkdir("private");
+        temp.write("private/hidden.txt", b"hidden\n");
+
+        let private = temp.path().join("private");
+        let original_permissions = fs::metadata(&private).unwrap().permissions();
+        let mut unreadable_permissions = original_permissions.clone();
+        unreadable_permissions.set_mode(0o000);
+        fs::set_permissions(&private, unreadable_permissions).unwrap();
+
+        let writer = TestWriter::new();
+        let walker = WalkerBuilder::new(
+            grep_recorder(),
+            matcher(),
+            display(Arc::new(writer.clone())),
+        )
+        .ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .force_ignore_patterns(Patterns::new(temp.path().to_str().unwrap(), &[]))
+        .file_filters(Filters::new(&["*".to_string()]).unwrap())
+        .build();
+
+        walker.walk(temp.path());
+
+        fs::set_permissions(&private, original_permissions).unwrap();
+
+        assert_eq!(vec!["visible.txt"], writer.lines());
     }
 }
