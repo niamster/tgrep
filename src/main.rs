@@ -141,6 +141,7 @@ fn main() -> Result<(), Error> {
     let paths = {
         let mut paths = paths.clone();
         paths.extend(args.opt_paths);
+        paths.sort();
         paths
     };
     info!(
