@@ -8,6 +8,7 @@ use std::{
     sync::Arc,
 };
 
+use crossbeam::channel;
 use crossbeam::sync::WaitGroup;
 use futures::executor::ThreadPool;
 use log::{debug, error, info, warn};
@@ -36,6 +37,11 @@ pub struct Walker {
     display: Arc<dyn Display>,
     print_file_separator: bool,
     file_separator_printed: Rc<AtomicBool>,
+}
+
+struct GrepResult {
+    seq: usize,
+    writer: Arc<BufferedWriter>,
 }
 
 pub struct WalkerBuilder(Walker);
@@ -138,7 +144,7 @@ impl Walker {
         path.exists()
     }
 
-    fn walk_dir(&self, path: &Path, parents: &[PathBuf]) {
+    fn collect_files_in_dir(&self, path: &Path, parents: &[PathBuf], files: &mut Vec<PathBuf>) {
         let walker = {
             let mut walker = self.clone();
             if let Some(mut ignore_patterns) = Self::process_gitignore(path) {
@@ -189,10 +195,10 @@ impl Walker {
             parents
         };
         for (entry, file_type) in to_dive {
-            walker.walk_with_parents(&entry, Some(file_type), &parents);
+            walker.collect_files_with_parents(&entry, Some(file_type), &parents, files);
         }
 
-        self.grep_many(&to_grep);
+        files.extend(to_grep);
     }
 
     fn grep(grep: Grep, entry: Arc<PathBuf>, matcher: Matcher, display: Arc<dyn Display>) {
@@ -214,42 +220,64 @@ impl Walker {
         }
     }
 
+    fn flush_writer(
+        &self,
+        writer: &Arc<BufferedWriter>,
+        output: &Arc<dyn crate::utils::writer::Writer>,
+    ) {
+        if self.print_file_separator
+            && writer.has_some()
+            && self.file_separator_printed.swap(true, Ordering::Relaxed)
+        {
+            self.display.file_separator();
+        }
+        writer.flush(output);
+    }
+
     fn grep_many(&self, entries: &[PathBuf]) {
-        let writer = self.display.writer();
-        let mut writers = Vec::with_capacity(entries.len());
+        let output = self.display.writer();
+        if entries.len() < 3 || self.tpool.is_none() {
+            for entry in entries {
+                let entry = Arc::new(entry.clone());
+                let matcher = self.matcher.clone();
+                let writer = Arc::new(BufferedWriter::new());
+                let display = self.display.with_writer(writer.clone());
+                Walker::grep(self.grep.clone(), entry, matcher, display);
+                self.flush_writer(&writer, &output);
+            }
+            return;
+        }
+
+        let (tx, rx) = channel::unbounded();
+        let mut pending = std::collections::BTreeMap::new();
         let wg = WaitGroup::new();
-        for entry in entries {
+        let tpool = self.tpool.as_ref().unwrap();
+
+        for (seq, entry) in entries.iter().enumerate() {
             let entry = Arc::new(entry.clone());
             let matcher = self.matcher.clone();
             let writer = Arc::new(BufferedWriter::new());
             let display = self.display.with_writer(writer.clone());
-            writers.push(writer);
-            if entries.len() < 3 {
-                Walker::grep(self.grep.clone(), entry, matcher, display);
-                continue;
-            }
-            match &self.tpool {
-                Some(tpool) => {
-                    let grep = self.grep.clone();
-                    let wg = wg.clone();
-                    tpool.spawn_ok(async move {
-                        Walker::grep(grep, entry, matcher, display);
-                        drop(wg);
-                    });
-                }
-                None => Walker::grep(self.grep.clone(), entry, matcher, display),
+            let grep = self.grep.clone();
+            let tx = tx.clone();
+            let wg = wg.clone();
+            tpool.spawn_ok(async move {
+                Walker::grep(grep, entry, matcher, display);
+                tx.send(GrepResult { seq, writer }).ok();
+                drop(wg);
+            });
+        }
+        drop(tx);
+
+        let mut next = 0;
+        for result in rx {
+            pending.insert(result.seq, result.writer);
+            while let Some(writer) = pending.remove(&next) {
+                self.flush_writer(&writer, &output);
+                next += 1;
             }
         }
         wg.wait();
-        for w in writers {
-            if self.print_file_separator
-                && w.has_some()
-                && self.file_separator_printed.swap(true, Ordering::Relaxed)
-            {
-                self.display.file_separator();
-            }
-            w.flush(&writer);
-        }
     }
 
     fn canonicalize(&self, orig: &Path, resolved: &Path) -> anyhow::Result<PathBuf> {
@@ -265,7 +293,13 @@ impl Walker {
         path
     }
 
-    fn process_symlink(&self, orig: &Path, resolved: &Path, parents: &[PathBuf]) {
+    fn collect_symlink_files(
+        &self,
+        orig: &Path,
+        resolved: &Path,
+        parents: &[PathBuf],
+        files: &mut Vec<PathBuf>,
+    ) {
         let path = self.canonicalize(orig, resolved);
         if let Err(e) = path {
             error!("Failed to canonicalize '{}': {}", resolved.display(), e);
@@ -291,14 +325,20 @@ impl Walker {
             );
             return;
         }
-        self.walk_with_parents(&path, None, &{
+        self.collect_files_with_parents(&path, None, &{
             let mut parents = parents.to_owned();
             parents.push(path.clone());
             parents
-        });
+        }, files);
     }
 
-    fn walk_with_parents(&self, path: &Path, file_type: Option<fs::FileType>, parents: &[PathBuf]) {
+    fn collect_files_with_parents(
+        &self,
+        path: &Path,
+        file_type: Option<fs::FileType>,
+        parents: &[PathBuf],
+        files: &mut Vec<PathBuf>,
+    ) {
         let file_type = file_type.or_else(|| match fs::symlink_metadata(path) {
             Ok(meta) => Some(meta.file_type()),
             Err(e) => {
@@ -311,21 +351,16 @@ impl Walker {
             _ => return,
         };
         if file_type.is_dir() {
-            self.walk_dir(path, parents);
+            self.collect_files_in_dir(path, parents, files);
         } else if file_type.is_file() {
-            Walker::grep(
-                self.grep.clone(),
-                Arc::new(path.to_path_buf()),
-                self.matcher.clone(),
-                self.display.clone(),
-            );
+            files.push(path.to_path_buf());
         } else if file_type.is_symlink() {
             if self.ignore_symlinks {
                 info!("Skipping symlink '{}'", path.display());
                 return;
             }
             match fs::read_link(path) {
-                Ok(resolved) => self.process_symlink(path, &resolved, parents),
+                Ok(resolved) => self.collect_symlink_files(path, &resolved, parents, files),
                 Err(e) => error!("Failed to read link '{}': {}", path.display(), e),
             }
         } else {
@@ -359,7 +394,10 @@ impl Walker {
     }
 
     pub fn walk(&self, path: &Path) {
-        self.walk_with_parents(path, None, &[]);
+        let mut files = Vec::new();
+        self.collect_files_with_parents(path, None, &[], &mut files);
+        files.sort();
+        self.grep_many(&files);
     }
 }
 
@@ -529,6 +567,27 @@ mod tests {
         walker.walk(temp.path());
 
         assert_eq!(vec!["visible.rs"], writer.lines());
+    }
+
+    #[test]
+    fn walk_outputs_files_in_global_lexicographic_order() {
+        let temp = TempDir::new();
+        temp.write("a.txt", b"match\n");
+        temp.write("b/c.txt", b"match\n");
+
+        let writer = TestWriter::new();
+        let walker = WalkerBuilder::new(
+            grep_recorder(),
+            matcher(),
+            display(Arc::new(writer.clone())),
+        )
+        .thread_pool(ThreadPool::new().unwrap())
+        .file_filters(Filters::new(&["*".to_string()]).unwrap())
+        .build();
+
+        walker.walk(temp.path());
+
+        assert_eq!(vec!["a.txt", "c.txt"], writer.lines());
     }
 
     #[test]
